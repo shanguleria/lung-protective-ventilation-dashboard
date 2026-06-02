@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.DS_Store
+
+# Site-specific config (each site copies config.example.json -> config.json)
+config.json
+
+# Internal working logs (not part of the shared template)
+.claude/
+
+# Generated outputs and intermediate data — kept out of git
+output/
+*.parquet
+*.csv
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp

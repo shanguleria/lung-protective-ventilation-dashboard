@@ -1,0 +1,9 @@
+clifpy>=0.3.8
+pandas
+numpy
+pyarrow
+matplotlib
+seaborn
+jupyter
+ipykernel
+plotly

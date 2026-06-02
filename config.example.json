@@ -1,0 +1,8 @@
+{
+  "clif_data_path": "/absolute/path/to/your/CLIF_2.x.x",
+  "filetype": "parquet",
+  "timezone": "US/Central",
+  "site": "YourSite",
+  "clif_version": "2.1.0",
+  "output_path": "output"
+}
