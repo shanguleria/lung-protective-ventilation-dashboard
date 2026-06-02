@@ -82,8 +82,8 @@ cp config.example.json config.json
 # 4. Run the whole pipeline
 ./run_pipeline.sh
 
-# 5. Open the dashboard
-open output/04_lpv_dashboard.html      # macOS  (Linux: xdg-open)
+# 5. Open the scorecard (the LPV tile links to the detailed dashboard)
+open output/index.html                 # macOS  (Linux: xdg-open)
 ```
 
 ### `config.json`
@@ -111,7 +111,22 @@ open output/04_lpv_dashboard.html      # macOS  (Linux: xdg-open)
 | 2 | `code/02_features.py` | `02_patient_day_status.parquet`, `02_intervals.parquet` — per-component adherence |
 | 2d | `code/02d_severity.py` | `02d_severity.parquet` — severe-respiratory-failure flag per patient-day |
 | 3 | `code/03_aggregate.py` | `03_*_unit_summary.parquet`, `03_vt_grid_*.parquet` — (time × unit, severity) rollups + Vt grid |
-| 4 | `code/04_dashboard.py` | **`04_lpv_dashboard.html`** — the dashboard |
+| 4 | `code/04_dashboard.py` | `04_lpv_dashboard.html` — the detailed LPV drill-down dashboard |
+| 5 | `code/05_scorecard.py` | **`index.html`** — the CLIF ICU ventilator-QI scorecard (open this; LPV tile → the drill-down) |
+
+### Scorecard
+
+`index.html` is a glanceable QI bundle scorecard in the CLIF house style, filterable by **ICU unit** and by
+**month or week** (mutually exclusive). The **LPV tile** (real) shows tidal-volume adherence at
+≤ `SCORECARD_VT_CUTOFF` mL/kg (default 8) with a goal bar and a 3-segment mini-indicator (Plateau ≤30 · ∆P ≤15 ·
+Vt in *severe* patients), and links to the detailed dashboard. **SAT, SBT, ARDS proning, and mobilization are
+styled placeholders** for the rest of the ICU-liberation bundle. Headline metric, goal, and cutoff are named
+constants in `code/05_scorecard.py`. Ship `index.html` and `04_lpv_dashboard.html` together (the tile links
+between them).
+
+Tile artwork is read from `references/images/<LPV|SAT|SBT|Proning|Mobilization>.png` (downscaled + embedded at build
+time); that folder is gitignored, and the scorecard **falls back to inline SVG icons** when the images are absent —
+so a fresh clone still builds.
 
 ### Recommended first: check your data
 

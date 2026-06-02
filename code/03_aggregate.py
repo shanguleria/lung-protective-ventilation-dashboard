@@ -59,6 +59,8 @@ print("[0] Loading 02 outputs ...")
 status = pd.read_parquet(OUT_DIR / "02_patient_day_status.parquet")
 status["calendar_day"] = pd.to_datetime(status["calendar_day"])
 status["month"] = status["calendar_day"].dt.strftime("%Y-%m")
+_iso = status["calendar_day"].dt.isocalendar()
+status["week"] = _iso["year"].astype(str) + "-W" + _iso["week"].astype(int).map("{:02d}".format)
 status["calendar_day"] = status["calendar_day"].dt.date
 status["hospitalization_id"] = status["hospitalization_id"].astype(str)
 
@@ -104,8 +106,10 @@ def summarize(bucket_col: str, by_severity: bool = False) -> pd.DataFrame:
 print("[A] Per-measure summaries (day all-severity, month severity-stratified) ...")
 daily = summarize("calendar_day")                      # all-severity (daily drill-down)
 monthly = summarize("month", by_severity=True)         # severity-stratified
+weekly = summarize("week")                             # all-severity (weekly view)
 daily.to_parquet(OUT_DIR / "03_daily_unit_summary.parquet", index=False)
 monthly.to_parquet(OUT_DIR / "03_monthly_unit_summary.parquet", index=False)
+weekly.to_parquet(OUT_DIR / "03_weekly_unit_summary.parquet", index=False)
 print(f"  wrote 03_daily_unit_summary.parquet  ({len(daily):,} rows)")
 print(f"  wrote 03_monthly_unit_summary.parquet ({len(monthly):,} rows)")
 
@@ -129,7 +133,7 @@ vt_assess = dur.where(vt_present, 0.0).groupby(gk).sum()
 comp_assess = dur.where(comp_present, 0.0).groupby(gk).sum()
 
 # Spine: every cohort patient-day with its unit + buckets (n_total denominator lives here).
-spine = status[["hospitalization_id", "calendar_day", "assigned_unit", "month", "severity"]].copy()
+spine = status[["hospitalization_id", "calendar_day", "assigned_unit", "month", "week", "severity"]].copy()
 
 # Per-(hosp,day) assessable booleans are cutoff-independent.
 day_idx = spine.set_index(key)
@@ -183,8 +187,10 @@ def grid_counts(bucket_col: str, pooled_only: bool, by_severity: bool = False) -
 
 grid_monthly = grid_counts("month", pooled_only=False, by_severity=True)
 grid_daily = grid_counts("calendar_day", pooled_only=True)   # all-severity (daily drill-down)
+grid_weekly = grid_counts("week", pooled_only=False)         # all-severity (weekly view, per-unit)
 grid_monthly.to_parquet(OUT_DIR / "03_vt_grid_monthly.parquet", index=False)
 grid_daily.to_parquet(OUT_DIR / "03_vt_grid_daily_allunits.parquet", index=False)
+grid_weekly.to_parquet(OUT_DIR / "03_vt_grid_weekly.parquet", index=False)
 print(f"  wrote 03_vt_grid_monthly.parquet       ({len(grid_monthly):,} rows)")
 print(f"  wrote 03_vt_grid_daily_allunits.parquet ({len(grid_daily):,} rows)")
 

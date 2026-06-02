@@ -11,6 +11,9 @@ config.json
 # Internal working logs (not part of the shared template)
 .claude/
 
+# Scorecard tile artwork (local; the scorecard falls back to inline SVG icons without them)
+references/images/
+
 # Generated outputs and intermediate data — kept out of git
 output/
 *.parquet

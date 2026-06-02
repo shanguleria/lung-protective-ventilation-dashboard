@@ -7,7 +7,8 @@
 #   02_features.py   -> output/02_patient_day_status.parquet, 02_intervals.parquet
 #   02d_severity.py  -> output/02d_severity.parquet  (severe respiratory failure flag)
 #   03_aggregate.py  -> output/03_*_unit_summary.parquet, 03_vt_grid_*.parquet
-#   04_dashboard.py  -> output/04_lpv_dashboard.html   (open this in a browser)
+#   04_dashboard.py  -> output/04_lpv_dashboard.html   (LPV drill-down)
+#   05_scorecard.py  -> output/index.html              (QI bundle scorecard — open this)
 #
 # Prereqs (see README.md): a .venv with requirements installed, and a config.json
 # (copy config.example.json -> config.json and edit it for your site).
@@ -37,6 +38,7 @@ steps=(
   "code/02d_severity.py"
   "code/03_aggregate.py"
   "code/04_dashboard.py"
+  "code/05_scorecard.py"
 )
 
 for step in "${steps[@]}"; do
@@ -48,4 +50,4 @@ for step in "${steps[@]}"; do
 done
 
 echo ""
-echo "Done. Open the dashboard:  output/04_lpv_dashboard.html"
+echo "Done. Open the QI scorecard:  output/index.html   (LPV tile → output/04_lpv_dashboard.html)"

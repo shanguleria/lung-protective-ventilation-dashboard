@@ -123,6 +123,8 @@ monthly = pd.read_parquet(OUT_DIR / "03_monthly_unit_summary.parquet")
 grid = pd.read_parquet(OUT_DIR / "03_vt_grid_monthly.parquet")
 daily_grid = pd.read_parquet(OUT_DIR / "03_vt_grid_daily_allunits.parquet")   # site-wide vt/comp daily
 daily_sum = pd.read_parquet(OUT_DIR / "03_daily_unit_summary.parquet")        # has __ALL__ daily for plat/dp
+wgrid = pd.read_parquet(OUT_DIR / "03_vt_grid_weekly.parquet")                # per-unit vt/comp weekly (all-severity)
+wsum = pd.read_parquet(OUT_DIR / "03_weekly_unit_summary.parquet")            # per-unit all-measure weekly
 status = pd.read_parquet(OUT_DIR / "02_patient_day_status.parquet")
 iv = pd.read_parquet(OUT_DIR / "02_intervals.parquet")
 feat = json.loads((OUT_DIR / "02_features_summary.json").read_text())
@@ -217,6 +219,45 @@ daily_sum["d"] = pd.to_datetime(daily_sum["calendar_day"]).dt.strftime("%Y-%m-%d
 days = sorted(daily_grid["d"].unique().tolist())
 didx = {d: i for i, d in enumerate(days)}
 
+# ISO-week mapping (lean weekly view: site-wide weekly from the daily data, no new payload).
+_dd = pd.to_datetime(pd.Series(days))
+_iso = _dd.dt.isocalendar()
+day_week = (_iso["year"].astype(str) + "-W" + _iso["week"].astype(int).map("{:02d}".format)).tolist()
+_wk = pd.DataFrame({"d": days, "wk": day_week})
+_rep = _wk.groupby("wk")["d"].min()
+week_label = {w: f"Week {int(w[-2:])} · {pd.Timestamp(_rep[w]).strftime('%b %Y')}" for w in _rep.index}
+weeks_list = sorted(set(day_week))
+
+# Per-(unit, ISO-week) counts (all-severity) — full weekly view: per-unit bars, etc.
+n_w = len(weeks_list)
+wkidx = {w: i for i, w in enumerate(weeks_list)}
+
+
+def warr(sub: pd.DataFrame, col: str) -> list:
+    a = [0] * n_w
+    for w, v in zip(sub["week"], sub[col]):
+        if w in wkidx:
+            a[wkidx[w]] = int(v)
+    return a
+
+
+wtot, wass, wad = {}, {}, {}
+for u in units:
+    gu = wgrid[wgrid["assigned_unit"] == u]
+    wtot[u] = warr(gu[(gu["measure"] == "vt") & (gu["vt_cutoff"] == VT_DEFAULT)], "n_total")
+    wass[u], wad[u] = {}, {}
+    for m in ["vt", "comp"]:
+        gm = gu[gu["measure"] == m]
+        wass[u][m] = warr(gm[gm["vt_cutoff"] == VT_DEFAULT], "n_assessable")
+        wad[u][m] = {f"{c:.1f}": warr(gm[gm["vt_cutoff"] == c], "n_adherent") for c in VT_GRID}
+wstc = {}
+for m in ["plat", "dp"]:
+    wstc[m] = {}
+    for u in units:
+        s = wsum[(wsum["assigned_unit"] == u) & (wsum["measure"] == m)].copy()
+        s["ass"] = s["n_adherent"] + s["n_non_adherent"]
+        wstc[m][u] = {"ad": warr(s, "n_adherent"), "ass": warr(s, "ass"), "tot": warr(s, "n_total")}
+
 
 def darr(sub: pd.DataFrame, col: str) -> list:
     a = [0] * len(days)
@@ -272,6 +313,21 @@ for col, spec in HIST_SPEC.items():
         by_sev[s] = counts
     histc[col] = {"centers": centers, "title": spec["title"], "threshold": spec["thr"], "counts": by_sev}
 
+# Weekly histograms (all-severity) — for the full weekly view.
+_iso2 = pd.to_datetime(iv["calendar_day"]).dt.isocalendar()
+iv["week"] = _iso2["year"].astype(str) + "-W" + _iso2["week"].astype(int).map("{:02d}".format)
+whist = {}
+for col, spec in HIST_SPEC.items():
+    edges = np.arange(spec["lo"], spec["hi"] + spec["step"], spec["step"])
+    nb = len(edges) - 1
+    counts = [[0.0] * nb for _ in range(n_w)]
+    sub = iv[iv[col].notna() & (iv[col] >= spec["lo"]) & (iv[col] < spec["hi"])]
+    for w, g in sub.groupby("week"):
+        if w in wkidx:
+            cnt, _ = np.histogram(g[col], bins=edges, weights=g["duration_min"])
+            counts[wkidx[w]] = [round(float(x), 1) for x in cnt]
+    whist[col] = counts
+
 # ----------------------------------------------------------------------------
 # 4. Per-period Table 1 + headline counts (precomputed; no row-level data shipped)
 # ----------------------------------------------------------------------------
@@ -280,6 +336,8 @@ print("[4] Per-period Table 1 ...")
 status_t = status.copy()
 status_t["month"] = pd.to_datetime(status_t["calendar_day"]).dt.strftime("%Y-%m")
 status_t["year"] = status_t["month"].str.slice(0, 4)
+_isos = pd.to_datetime(status_t["calendar_day"]).dt.isocalendar()
+status_t["week"] = _isos["year"].astype(str) + "-W" + _isos["week"].astype(int).map("{:02d}".format)
 
 
 def build_table1(sub: pd.DataFrame) -> str:
@@ -332,11 +390,21 @@ cohort_headline = {
 }
 table1_html = table1["all"]["all"]  # initial render (all-time, all-severity)
 
+# Per-ISO-week Table 1 + headline (all-severity) for the full weekly view.
+wtable1, wheadline = {}, {}
+for w, sw in status_t.groupby("week"):
+    if w in wkidx:
+        wtable1[w] = build_table1(sw)
+        wheadline[w] = headline(sw)
+
 payload = jsonable({
     "params": {"vt_grid": VT_GRID, "vt_default": VT_DEFAULT, "plateau_max": PLATEAU_MAX,
                "dp_max": DP_MAX, "adherence_fraction": agg["params"]["adherence_fraction"],
                "min_assessable_min": agg["params"]["min_assessable_min"]},
     "months": months, "years": years, "units": units, "days": days, "severity_strata": SEVS,
+    "day_week": day_week, "week_label": week_label, "weeks": weeks_list,
+    "wtot": wtot, "wass": wass, "wad": wad, "wstc": wstc, "whist": whist,
+    "wtable1": wtable1, "wheadline": wheadline,
     "unit_label": UNIT_LABEL, "measure_label": MEASURE_LABEL,
     "cohort_headline": cohort_headline, "period_headline": period_headline,
     "tot": tot, "ass": ass, "ad": ad, "stc": stc, "vtd": vtd, "std": std,
@@ -444,9 +512,23 @@ const baseLayout = extra => Object.assign({font:FONT, margin:{l:54,r:18,t:28,b:4
   yaxis:{tickformat:".0%", rangemode:"tozero", gridcolor:"#f1f5f9"},
   xaxis:{gridcolor:"#f8fafc"}, legend:{font:{size:11}}}, extra||{});
 const CFG = {displayModeBar:false, responsive:true};
-let state = {cutoff:P.params.vt_default, trendMeasure:"vt", year:"all", month:"all", severity:"all"};
+let state = {cutoff:P.params.vt_default, trendMeasure:"vt", year:"all", month:"all", week:"all", severity:"all"};
 let active = "p-vt";
 function sevList(){ return state.severity==="all" ? P.severity_strata : [state.severity]; }
+// ISO-week → day-index map (lean weekly = site-wide, from the daily data).
+const WEEKDAYS = {}; (P.day_week||[]).forEach((wk,i)=>{ (WEEKDAYS[wk]=WEEKDAYS[wk]||[]).push(i); });
+function isWeek(){ return state.year!=="all" && state.week!=="all"; }
+function widx(){ return P.weeks.indexOf(state.week); }
+// Per-(unit, week) rate from the weekly count arrays (all-severity, slider-aware for vt/comp).
+function mRateW(measure, unit){
+  const i=widx(); if(i<0) return rates(0,0,0);
+  if(measure==="vt"||measure==="comp"){
+    const ck=CK(state.cutoff);
+    return rates(P.wad[unit][measure][ck][i], P.wass[unit][measure][i], P.wtot[unit][i]);
+  }
+  const o=P.wstc[measure][unit]; return rates(o.ad[i], o.ass[i], o.tot[i]);
+}
+function weekN(){ const i=widx(); return i<0 ? 0 : P.wtot["__ALL__"][i]; }
 const SEV_LABEL = {all:"all severity", severe:"severe resp failure", not_severe:"not severe", unknown:"unknown (no usable O₂)"};
 
 // ---------- Period helpers ----------
@@ -457,6 +539,7 @@ function periodKey(){
 }
 function periodLabel(){
   if(state.year==="all") return "all time";
+  if(isWeek()) return (P.week_label[state.week]||state.week);
   if(state.month==="all") return state.year;
   return MNAME[parseInt(state.month,10)-1]+" "+state.year;
 }
@@ -514,7 +597,15 @@ function dailySeries(measure, dayKeys){
   return dayKeys.map(d=>{ const i=di[d]; return (i!=null && o.ass[i]) ? o.ad[i]/o.ass[i] : null; });
 }
 // Build trend traces + x-axis range depending on the selected period granularity.
-function buildTrend(measure){
+// allOnly = just the combined "All ICUs" line (used by the Vt headline tab).
+function dayPlus(s){ const d=new Date(s+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); return d.toISOString().slice(0,10); }
+function buildTrend(measure, allOnly){
+  if(isWeek()){
+    const dk=(WEEKDAYS[state.week]||[]).map(i=>P.days[i]);
+    return {traces:[{x:dk, y:dailySeries(measure,dk), name:"All ICUs (daily)", mode:"lines+markers",
+                     line:{color:"#0f172a",width:2}, marker:{size:6,color:"#0f766e"}, connectgaps:false}],
+            xrange: dk.length?[dk[0], dayPlus(dk[dk.length-1])]:null, daily:true};
+  }
   if(isMonth()){
     const mk=state.year+"-"+state.month;
     const dk=P.days.filter(d=>d.slice(0,7)===mk);
@@ -522,7 +613,10 @@ function buildTrend(measure){
                      line:{color:"#0f172a",width:2}, marker:{size:5,color:"#0f766e"}, connectgaps:false}],
             xrange:[mk+"-01", monthAfter(mk)], daily:true};
   }
-  const traces=unitTraces(measure);
+  const traces = allOnly
+    ? [{x:P.months, y:trendSeries(measure,"__ALL__"), name:"All ICUs", mode:"lines",
+        line:{color:COLORS["__ALL__"],width:2.5}, connectgaps:false}]
+    : unitTraces(measure);
   const xrange = isYear() ? [state.year+"-01-01", monthAfter(state.year+"-12")] : null;
   return {traces, xrange, daily:false};
 }
@@ -531,8 +625,8 @@ function buildTrend(measure){
 function setText(){
   const idxs=periodIdxs();
   document.getElementById('cutoff-readout').textContent = Number(state.cutoff).toFixed(1);
-  const vt=mRate("vt","__ALL__",idxs), comp=mRate("comp","__ALL__",idxs);
-  const plat=mRate("plat","__ALL__",idxs), dp=mRate("dp","__ALL__",idxs);
+  const R = m => isWeek() ? mRateW(m,"__ALL__") : mRate(m,"__ALL__",idxs);
+  const vt=R("vt"), comp=R("comp"), plat=R("plat"), dp=R("dp");
   document.getElementById('vt-big').textContent = PCT(vt.ar);
   document.getElementById('vt-pct').textContent = PCT(vt.pct);
   document.getElementById('vt-crude').textContent = PCT(vt.crude);
@@ -546,10 +640,19 @@ function setText(){
   document.getElementById('cb-comp-pct').textContent = "assessable on "+PCT(comp.pct);
 }
 function setHeaderAndTable(){
-  const k=periodKey(), sv=state.severity;
-  const ph=(P.period_headline[sv]||P.period_headline["all"])[k] || P.cohort_headline;
-  const lbl=periodLabel(), sevTxt = (sv==="all") ? "" : " · "+SEV_LABEL[sv];
+  const k=periodKey(), sv=state.severity, lbl=periodLabel();
   document.getElementById('period-readout').textContent = lbl;
+  if(isWeek()){
+    const ph=P.wheadline[state.week]||P.cohort_headline;
+    document.getElementById('cohort-line').textContent =
+      ph.n_patient_days.toLocaleString()+" IMV-on-ICU patient-days · "+
+      ph.n_hosps.toLocaleString()+" hospitalizations · "+ph.n_patients.toLocaleString()+" patients ("+lbl+")";
+    document.getElementById('table1-box').innerHTML = P.wtable1[state.week] || P.table1["all"]["all"];
+    document.getElementById('t1-period').textContent = " — "+lbl;
+    return;
+  }
+  const sevTxt = (sv==="all") ? "" : " · "+SEV_LABEL[sv];
+  const ph=(P.period_headline[sv]||P.period_headline["all"])[k] || P.cohort_headline;
   document.getElementById('cohort-line').textContent =
     ph.n_patient_days.toLocaleString()+" IMV-on-ICU patient-days · "+
     ph.n_hosps.toLocaleString()+" hospitalizations · "+ph.n_patients.toLocaleString()+" patients ("+lbl+sevTxt+")";
@@ -559,13 +662,13 @@ function setHeaderAndTable(){
 
 // ---------- Per-panel draw (panel visible when called) ----------
 function drawVt(){
-  const t=buildTrend("vt");
-  Plotly.react('vt-trend', t.traces, baseLayout({xaxis:{range:t.xrange, gridcolor:"#f8fafc",
+  const t=buildTrend("vt", true);   // headline: combined All-ICUs curve only
+  Plotly.react('vt-trend', t.traces, baseLayout({showlegend:false, xaxis:{range:t.xrange, gridcolor:"#f8fafc",
     title:t.daily?{text:"Daily — "+periodLabel(),font:{size:11}}:undefined}}), CFG);
 }
 function drawComp(){
   const idxs=periodIdxs(), ms=["vt","plat","dp","comp"];
-  const rs=ms.map(m=>mRate(m,"__ALL__",idxs).ar);
+  const rs=ms.map(m=> (isWeek()?mRateW(m,"__ALL__"):mRate(m,"__ALL__",idxs)).ar);
   Plotly.react('cb-bar', [{x:ms.map(m=>P.measure_label[m]), y:rs, type:"bar",
     marker:{color:["#0f766e","#475569","#475569","#0f766e"]}, text:rs.map(PCT),
     textposition:"outside", cliponaxis:false}],
@@ -573,27 +676,31 @@ function drawComp(){
 }
 function drawTrends(){
   const m=state.trendMeasure, idxs=periodIdxs(), isVt=(m==="vt"||m==="comp");
-  const t=buildTrend(m);
-  Plotly.react('tr-trend', t.traces, baseLayout({xaxis:{range:t.xrange, gridcolor:"#f8fafc",
-    title:t.daily?{text:"Daily — "+periodLabel(),font:{size:11}}:undefined}}), CFG);
+  // Trend = per-unit MONTHLY lines, x-axis zoomed to the selected period's year (full for all-time).
+  const xr = (state.year==="all") ? null : [state.year+"-01-01", monthAfter(state.year+"-12")];
+  Plotly.react('tr-trend', unitTraces(m), baseLayout({xaxis:{range:xr, gridcolor:"#f8fafc"}}), CFG);
+  // Bar = the exact selected period (month / week / year / all).
   const us=P.units.filter(u=>u!=="__ALL__");
-  const rate=u=>mRate(m,u,idxs).ar;
+  const rate=u=> (isWeek()?mRateW(m,u):mRate(m,u,idxs)).ar;
   Plotly.react('tr-bar', [{x:us.map(u=>P.unit_label[u]||u), y:us.map(rate), type:"bar",
     marker:{color:us.map(u=>COLORS[u]||"#888")}, text:us.map(u=>PCT(rate(u))),
     textposition:"outside", cliponaxis:false}],
     baseLayout({margin:{l:54,r:18,t:10,b:90}}), CFG);
+  document.getElementById('tr-trend-title').textContent =
+    "Per-unit monthly adherence" + (state.year==="all" ? " · all time" : " · "+state.year);
+  document.getElementById('tr-bar-title').textContent = "By unit · " + periodLabel();
   document.getElementById('tr-note').textContent =
-    (isVt ? ("Vt cutoff "+Number(state.cutoff).toFixed(1)+" mL/kg") : "Fixed threshold") + " · "+periodLabel()
-    + (state.severity!=="all" ? " · "+SEV_LABEL[state.severity] : "")
-    + (isMonth()? " · daily, site-wide (all severity)" : "");
+    (isVt ? ("Vt cutoff "+Number(state.cutoff).toFixed(1)+" mL/kg") : "Fixed threshold")
+    + (state.severity!=="all" ? " · "+SEV_LABEL[state.severity] : "");
 }
 function drawDist(){
-  const idxs=periodIdxs(), sevs=sevList();
+  const idxs=periodIdxs(), sevs=sevList(), wk=isWeek(), wi=widx();
   ["vt_per_pbw","plateau","driving_pressure","peep","fio2"].forEach(col=>{
     const h=P.histc[col], n=h.centers.length;
     let tot=0; const agg=new Array(n).fill(0);
-    for(const s of sevs){ const C=h.counts[s];
-      for(const i of idxs){ const row=C[i]; for(let b=0;b<n;b++){agg[b]+=row[b];} } }
+    if(wk){ const row=(P.whist[col]||[])[wi]||[]; for(let b=0;b<n;b++) agg[b]=row[b]||0; }
+    else { for(const s of sevs){ const C=h.counts[s];
+      for(const i of idxs){ const row=C[i]; for(let b=0;b<n;b++){agg[b]+=row[b];} } } }
     for(const v of agg) tot+=v;
     const frac=agg.map(v=> tot? v/tot : 0);
     const thr=(h.threshold==="slider")?state.cutoff:h.threshold;
@@ -624,23 +731,29 @@ document.getElementById('vt-slider').oninput = e => {
 document.getElementById('tr-measure').onchange = e => {
   state.trendMeasure = e.target.value; if(active==="p-trend") drawTrends();
 };
-const monthSel = document.getElementById('sel-month');
-function onPeriodChange(){
-  state.year = document.getElementById('sel-year').value;
-  state.month = monthSel.value;
-  monthSel.disabled = (state.year==="all");
-  if(state.year==="all"){ monthSel.value="all"; state.month="all"; }
+const yearSel=document.getElementById('sel-year'), monthSel=document.getElementById('sel-month'),
+      weekSel=document.getElementById('sel-week'), sevSel=document.getElementById('sel-severity');
+function populateWeeks(yr){
+  let opts='<option value="all">All weeks</option>';
+  if(yr!=="all"){ for(const w of P.weeks){ if(w.startsWith(yr+"-W")) opts+=`<option value="${w}">${P.week_label[w]||w}</option>`; } }
+  weekSel.innerHTML=opts;
+}
+function applyPeriod(){
+  state.year=yearSel.value;
+  monthSel.disabled = weekSel.disabled = (state.year==="all");
+  if(state.year==="all"){ monthSel.value="all"; weekSel.value="all"; }
+  state.month=monthSel.value; state.week=weekSel.value;
+  sevSel.disabled = isWeek();                          // weekly = all-severity (daily data isn't split)
+  if(isWeek()){ sevSel.value="all"; state.severity="all"; }
   setText(); setHeaderAndTable(); DRAW[active]();
 }
-document.getElementById('sel-year').onchange = onPeriodChange;
-monthSel.onchange = onPeriodChange;
-document.getElementById('sel-severity').onchange = e => {
-  state.severity = e.target.value;
-  setText(); setHeaderAndTable(); DRAW[active]();
-};
+yearSel.onchange = ()=>{ monthSel.value="all"; weekSel.value="all"; populateWeeks(yearSel.value); applyPeriod(); };
+monthSel.onchange = ()=>{ if(monthSel.value!=="all") weekSel.value="all"; applyPeriod(); };   // month & week mutually exclusive
+weekSel.onchange  = ()=>{ if(weekSel.value!=="all") monthSel.value="all"; applyPeriod(); };
+sevSel.onchange   = ()=>{ state.severity=sevSel.value; setText(); setHeaderAndTable(); DRAW[active](); };
 
 // ---------- Init ----------
-monthSel.disabled = true;
+monthSel.disabled = weekSel.disabled = true;
 setText(); setHeaderAndTable();
 showPanel((location.hash||"#p-vt").slice(1));
 """
@@ -663,6 +776,7 @@ ch = cohort_headline
 BODY = f"""
 <div class="wrap">
 <header class="sticky">
+  <a href="index.html" style="display:inline-block;font-size:12px;color:#8a1f2b;text-decoration:none;font-weight:700;margin-bottom:4px">← CLIF ICU Ventilator QI Bundle</a>
   <h1>Lung-Protective Ventilation Adherence — {SITE}</h1>
   <p class="sub" id="cohort-line">{ch['n_patient_days']:,} IMV-on-ICU patient-days · {ch['n_hosps']:,} hospitalizations · {ch['n_patients']:,} patients (all time)</p>
   <p class="sub" style="margin-top:1px">{ch['day_min']} → {ch['day_max']} · Descriptive; component-separated, each measure on its own denominator.</p>
@@ -677,6 +791,7 @@ BODY = f"""
     <label>Period</label>
     <select id="sel-year">{year_opts}</select>
     <select id="sel-month">{month_opts}</select>
+    <select id="sel-week"><option value="all">All weeks</option></select>
     <span class="val" style="font-size:13px;min-width:90px">📅 <span id="period-readout">all time</span></span>
   </div>
 </header>
@@ -697,7 +812,7 @@ BODY = f"""
   </div>
   <p class="fig-caption">Among Vt-assessable patient-days (Vt + PBW present, mode-eligible IMV), the % with ≥80% of assessable time at Vt/kg ≤ the chosen cutoff. Move the slider above.</p>
   <div id="vt-trend" style="height:420px"></div>
-  <p class="fig-caption">Monthly Vt assessable-adherence by ICU unit (bold = all ICUs).</p>
+  <p class="fig-caption">Monthly Vt assessable-adherence, all ICUs combined. (Per-unit lines are on the "By unit &amp; over time" tab.)</p>
 </div></div>
 
 <div id="p-comp" class="panel"><div class="section">
@@ -720,8 +835,8 @@ BODY = f"""
     <span class="fig-caption" id="tr-note"></span>
   </div>
   <div class="grid2">
-    <div><h3>Monthly trend by unit</h3><div id="tr-trend" style="height:380px"></div></div>
-    <div><h3>Overall by unit</h3><div id="tr-bar" style="height:380px"></div></div>
+    <div><h3 id="tr-trend-title">Per-unit monthly adherence</h3><div id="tr-trend" style="height:380px"></div></div>
+    <div><h3 id="tr-bar-title">By unit</h3><div id="tr-bar" style="height:380px"></div></div>
   </div>
 </div></div>
 
@@ -803,6 +918,9 @@ checks = {
     "per-month hist counts present (per stratum)":
         all(len(pl["histc"][c]["counts"]["severe"]) == len(pl["months"]) for c in pl["histc"]),
     "daily site-wide data present": (len(pl["days"]) > 2000 and "6.0" in pl["vtd"] and "plat" in pl["std"]),
+    "weekly full data present": (len(pl["weeks"]) > 100 and len(pl["day_week"]) == len(pl["days"])
+                                 and 'id="sel-week"' in text and "__ALL__" in pl["wtot"]
+                                 and "vt_per_pbw" in pl["whist"] and len(pl["wtable1"]) > 100),
     "plotly inlined": "Plotly" in text[:300000],
     "slider input present": 'id="vt-slider"' in text,
     "4 tab panels": text.count('class="panel') == 4,
