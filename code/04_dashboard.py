@@ -432,6 +432,32 @@ if not plotly_path.exists():
 plotly_js = plotly_path.read_text()
 print(f"[5] Plotly inlined ({len(plotly_js)/1e6:.1f} MB)")
 
+# CLIF brand logo for the header (icon + wordmark), base64-embedded + CSS-scaled.
+# Falls back to the text breadcrumb alone if the PNG is absent (so clone sites still build).
+import base64
+from io import BytesIO
+
+IMG_DIR = ROOT / "references" / "images"
+
+
+def _load_logo(stem="clif_logo_v2", px=480):
+    p = IMG_DIR / f"{stem}.png"
+    if not p.exists():
+        return None
+    try:
+        from PIL import Image
+        im = Image.open(p).convert("RGBA")
+        im.thumbnail((px, px))
+        buf = BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
+
+
+LOGO_IMG = _load_logo()
+print(f"[img] brand logo embedded: {'yes' if LOGO_IMG else 'no (breadcrumb only)'}")
+
 # ----------------------------------------------------------------------------
 # 6. Assemble HTML
 # ----------------------------------------------------------------------------
@@ -439,78 +465,85 @@ print(f"[5] Plotly inlined ({len(plotly_js)/1e6:.1f} MB)")
 print("[6] Assembling HTML ...")
 
 CSS = """
-:root{--text:#1e293b;--head:#0f172a;--sec:#64748b;--muted:#94a3b8;--teal:#0f766e;
---teal-l:#f0fdfa;--teal-b:#ccfbf1;--hbg:#f8fafc;--hrule:#334155;--rowb:#f1f5f9;
---rowalt:#fafbfc;--div:#e2e8f0;--page:#f8f9fa;}
+:root{--maroon:#8a1f2b;--maroon-d:#6f1622;--cream:#f6efe9;--card:#fffdfb;--ink:#3a2c2c;
+--muted:#9a8c86;--line:#ece1d9;--good:#2f7d5b;--warn:#b5852a;--bad:#a23b3b;--bar:#efe4dc;
+--rowalt:#faf5f1;}
 *{box-sizing:border-box}
 body{font-family:Inter,-apple-system,'Segoe UI',system-ui,sans-serif;font-size:14px;
-line-height:1.55;color:var(--text);background:var(--page);margin:0;}
-.wrap{max-width:1600px;margin:0 auto;background:#fff;padding:0 48px 48px;
-box-shadow:0 1px 3px rgba(0,0,0,.08);}
-header.sticky{position:sticky;top:0;z-index:50;background:#fff;border-bottom:1px solid var(--div);
-padding:20px 0 14px;margin-bottom:24px;}
-h1{font-size:26px;font-weight:700;letter-spacing:-.3px;color:var(--head);margin:0 0 4px;}
-h2{font-size:19px;font-weight:600;color:var(--head);border-bottom:1px solid var(--div);
+line-height:1.55;color:var(--ink);background:var(--cream);margin:0;}
+.wrap{max-width:1600px;margin:0 auto;background:var(--card);padding:0 48px 48px;
+box-shadow:0 1px 3px rgba(120,30,40,.08);}
+header.sticky{position:sticky;top:0;z-index:50;background:var(--card);border-bottom:1px solid var(--line);
+padding:18px 0 14px;margin-bottom:24px;}
+.brandrow{display:flex;align-items:center;gap:18px;}
+.brandrow img.logo{height:56px;width:auto;display:block;flex:0 0 auto;}
+.titleblock{min-width:0;}
+.backlink{display:inline-block;font-size:12.5px;color:var(--maroon);text-decoration:none;font-weight:700;margin-bottom:4px;}
+.backlink:hover{text-decoration:underline;}
+h1{font-size:27px;font-weight:800;letter-spacing:-.3px;color:var(--maroon-d);margin:0 0 4px;}
+h2{font-size:19px;font-weight:700;color:var(--maroon-d);border-bottom:1px solid var(--line);
 padding-bottom:8px;margin:0 0 18px;}
-h3{font-size:15px;font-weight:600;margin:0 0 6px;}
-.sub{color:var(--sec);font-size:13px;margin:0;}
+h3{font-size:15px;font-weight:600;margin:0 0 6px;color:var(--ink);}
+.sub{color:var(--muted);font-size:13px;margin:0;}
 .slider-bar{display:flex;align-items:center;gap:16px;margin-top:14px;padding:12px 16px;
-background:var(--teal-l);border:1px solid var(--teal-b);border-radius:8px;}
-.slider-bar label{font-weight:600;color:var(--teal);font-size:13px;white-space:nowrap;}
-.slider-bar input[type=range]{flex:1;accent-color:var(--teal);max-width:480px;}
-.slider-bar .val{font-variant-numeric:tabular-nums;font-weight:700;font-size:18px;
-color:var(--head);min-width:64px;}
-.slider-bar .hint{color:var(--sec);font-size:12px;}
-.slider-bar select{padding:5px 8px;border:1px solid var(--teal-b);border-radius:6px;font-size:13px;background:#fff;color:var(--text);}
+background:var(--cream);border:1px solid var(--line);border-radius:10px;}
+.slider-bar label{font-weight:700;color:var(--maroon);font-size:14px;white-space:nowrap;}
+.slider-bar input[type=range]{flex:1;accent-color:var(--maroon);max-width:480px;}
+.slider-bar .val{font-variant-numeric:tabular-nums;font-weight:800;font-size:18px;
+color:var(--maroon-d);min-width:64px;}
+.slider-bar .hint{color:var(--muted);font-size:12px;}
+.slider-bar select{padding:7px 11px;border:1px solid var(--line);border-radius:7px;font-size:14px;
+background:var(--card);color:var(--ink);font-weight:600;cursor:pointer;}
 .slider-bar select:disabled{opacity:.5;}
 .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px;}
-.tab{padding:8px 16px;border-radius:6px;border:1px solid var(--div);background:#fff;
-font-size:13px;font-weight:500;cursor:pointer;color:var(--text);}
-.tab:hover{background:var(--rowb);}
-.tab.active{background:var(--teal);color:#fff;border-color:var(--teal);
-box-shadow:0 1px 3px rgba(15,118,110,.3);}
+.tab{padding:9px 17px;border-radius:999px;border:1px solid var(--line);background:var(--card);
+font-size:13.5px;font-weight:600;cursor:pointer;color:var(--ink);}
+.tab:hover{background:var(--cream);}
+.tab.active{background:var(--maroon);color:#fff;border-color:var(--maroon);
+box-shadow:0 1px 3px rgba(138,31,43,.3);}
 .panel{display:none;}.panel.active{display:block;}
-.section{padding:28px;border:1px solid var(--rowb);border-radius:8px;
-box-shadow:0 1px 2px rgba(0,0,0,.03);margin-bottom:32px;}
+.section{padding:28px;border:1px solid var(--line);border-radius:14px;background:var(--card);
+box-shadow:0 3px 10px rgba(120,30,40,.05);margin-bottom:32px;}
 .bignum{display:flex;gap:40px;flex-wrap:wrap;margin:8px 0 20px;}
-.bignum .stat .v{font-size:40px;font-weight:700;color:var(--teal);
+.bignum .stat .v{font-size:40px;font-weight:800;color:var(--maroon);
 font-variant-numeric:tabular-nums;line-height:1;}
-.bignum .stat .l{font-size:12px;color:var(--sec);text-transform:uppercase;
+.bignum .stat .l{font-size:12px;color:var(--muted);text-transform:uppercase;
 letter-spacing:.5px;margin-top:6px;}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:8px 0 18px;}
-.card{border:1px solid var(--rowb);border-radius:8px;padding:18px;}
-.card .name{font-size:13px;font-weight:600;color:var(--head);}
-.card .rate{font-size:30px;font-weight:700;color:var(--teal);font-variant-numeric:tabular-nums;margin:6px 0 2px;}
-.card .meta{font-size:12px;color:var(--sec);}
-.card.fixed .rate{color:#475569;}
+.card{border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--card);}
+.card .name{font-size:13px;font-weight:700;color:var(--maroon-d);}
+.card .rate{font-size:30px;font-weight:800;color:var(--maroon);font-variant-numeric:tabular-nums;margin:6px 0 2px;}
+.card .meta{font-size:12px;color:var(--muted);}
+.card.fixed .rate{color:var(--muted);}
 .controls{display:flex;gap:18px;align-items:center;margin-bottom:14px;flex-wrap:wrap;}
-.controls select{padding:6px 10px;border:1px solid var(--div);border-radius:6px;font-size:13px;}
-.controls label{font-size:12px;color:var(--sec);text-transform:uppercase;letter-spacing:.5px;}
-.fig-caption{font-size:13px;color:var(--sec);margin:6px 0 0;}
+.controls select{padding:7px 11px;border:1px solid var(--line);border-radius:7px;font-size:14px;
+background:var(--card);color:var(--ink);font-weight:600;}
+.controls label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+.fig-caption{font-size:13px;color:var(--muted);margin:6px 0 0;}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px;}
 .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:24px;}
 .results-table{border-collapse:collapse;width:auto;font-size:13px;margin-top:8px;}
-.results-table thead th{background:var(--hbg);border-bottom:2px solid var(--hrule);
-padding:9px 12px;text-align:left;font-weight:600;}
-.results-table tbody td{padding:9px 12px;border-bottom:1px solid var(--rowb);text-align:left;}
+.results-table thead th{background:var(--cream);border-bottom:2px solid var(--maroon-d);
+padding:9px 12px;text-align:left;font-weight:700;color:var(--maroon-d);}
+.results-table tbody td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;}
 .results-table tbody tr:nth-child(even){background:var(--rowalt);}
-.narr{background:var(--teal-l);border:1px solid var(--teal-b);border-radius:8px;
-padding:14px 18px;font-size:13px;color:#134e4a;margin-bottom:18px;}
+.narr{background:var(--cream);border:1px solid var(--line);border-left:3px solid var(--maroon);
+border-radius:10px;padding:14px 18px;font-size:13px;color:var(--ink);margin-bottom:18px;}
 .ts{color:var(--muted);font-size:11px;margin-top:28px;}
 """
 
 APP_JS = r"""
 const P = JSON.parse(document.getElementById('payload').textContent);
-const COLORS = {"__ALL__":"#0f172a","medical_icu":"#0072B2","mixed_cardiothoracic_icu":"#E69F00",
+const COLORS = {"__ALL__":"#8a1f2b","medical_icu":"#0072B2","mixed_cardiothoracic_icu":"#E69F00",
 "surgical_icu":"#009E73","mixed_neuro_icu":"#CC79A7","general_icu":"#882255","burn_icu":"#44AA99"};
 const MNAME = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PCT = v => (v==null||isNaN(v)) ? '—' : (v*100).toFixed(1)+'%';
 const CK = c => Number(c).toFixed(1);
-const FONT = {family:"Inter, system-ui, sans-serif", size:12, color:"#1e293b"};
+const FONT = {family:"Inter, system-ui, sans-serif", size:12, color:"#3a2c2c"};
 const baseLayout = extra => Object.assign({font:FONT, margin:{l:54,r:18,t:28,b:44},
   paper_bgcolor:"#fff", plot_bgcolor:"#fff", hovermode:"x unified",
-  yaxis:{tickformat:".0%", rangemode:"tozero", gridcolor:"#f1f5f9"},
-  xaxis:{gridcolor:"#f8fafc"}, legend:{font:{size:11}}}, extra||{});
+  yaxis:{tickformat:".0%", rangemode:"tozero", gridcolor:"#ece1d9"},
+  xaxis:{gridcolor:"#f6efe9"}, legend:{font:{size:11}}}, extra||{});
 const CFG = {displayModeBar:false, responsive:true};
 let state = {cutoff:P.params.vt_default, trendMeasure:"vt", year:"all", month:"all", week:"all", severity:"all"};
 let active = "p-vt";
@@ -603,14 +636,14 @@ function buildTrend(measure, allOnly){
   if(isWeek()){
     const dk=(WEEKDAYS[state.week]||[]).map(i=>P.days[i]);
     return {traces:[{x:dk, y:dailySeries(measure,dk), name:"All ICUs (daily)", mode:"lines+markers",
-                     line:{color:"#0f172a",width:2}, marker:{size:6,color:"#0f766e"}, connectgaps:false}],
+                     line:{color:"#6f1622",width:2}, marker:{size:6,color:"#8a1f2b"}, connectgaps:false}],
             xrange: dk.length?[dk[0], dayPlus(dk[dk.length-1])]:null, daily:true};
   }
   if(isMonth()){
     const mk=state.year+"-"+state.month;
     const dk=P.days.filter(d=>d.slice(0,7)===mk);
     return {traces:[{x:dk, y:dailySeries(measure,dk), name:"All ICUs (daily)", mode:"lines+markers",
-                     line:{color:"#0f172a",width:2}, marker:{size:5,color:"#0f766e"}, connectgaps:false}],
+                     line:{color:"#6f1622",width:2}, marker:{size:5,color:"#8a1f2b"}, connectgaps:false}],
             xrange:[mk+"-01", monthAfter(mk)], daily:true};
   }
   const traces = allOnly
@@ -663,14 +696,14 @@ function setHeaderAndTable(){
 // ---------- Per-panel draw (panel visible when called) ----------
 function drawVt(){
   const t=buildTrend("vt", true);   // headline: combined All-ICUs curve only
-  Plotly.react('vt-trend', t.traces, baseLayout({showlegend:false, xaxis:{range:t.xrange, gridcolor:"#f8fafc",
+  Plotly.react('vt-trend', t.traces, baseLayout({showlegend:false, xaxis:{range:t.xrange, gridcolor:"#f6efe9",
     title:t.daily?{text:"Daily — "+periodLabel(),font:{size:11}}:undefined}}), CFG);
 }
 function drawComp(){
   const idxs=periodIdxs(), ms=["vt","plat","dp","comp"];
   const rs=ms.map(m=> (isWeek()?mRateW(m,"__ALL__"):mRate(m,"__ALL__",idxs)).ar);
   Plotly.react('cb-bar', [{x:ms.map(m=>P.measure_label[m]), y:rs, type:"bar",
-    marker:{color:["#0f766e","#475569","#475569","#0f766e"]}, text:rs.map(PCT),
+    marker:{color:["#8a1f2b","#9a8c86","#9a8c86","#8a1f2b"]}, text:rs.map(PCT),
     textposition:"outside", cliponaxis:false}],
     baseLayout({margin:{l:54,r:18,t:10,b:60}}), CFG);
 }
@@ -678,7 +711,7 @@ function drawTrends(){
   const m=state.trendMeasure, idxs=periodIdxs(), isVt=(m==="vt"||m==="comp");
   // Trend = per-unit MONTHLY lines, x-axis zoomed to the selected period's year (full for all-time).
   const xr = (state.year==="all") ? null : [state.year+"-01-01", monthAfter(state.year+"-12")];
-  Plotly.react('tr-trend', unitTraces(m), baseLayout({xaxis:{range:xr, gridcolor:"#f8fafc"}}), CFG);
+  Plotly.react('tr-trend', unitTraces(m), baseLayout({xaxis:{range:xr, gridcolor:"#f6efe9"}}), CFG);
   // Bar = the exact selected period (month / week / year / all).
   const us=P.units.filter(u=>u!=="__ALL__");
   const rate=u=> (isWeek()?mRateW(m,u):mRate(m,u,idxs)).ar;
@@ -704,25 +737,30 @@ function drawDist(){
     for(const v of agg) tot+=v;
     const frac=agg.map(v=> tot? v/tot : 0);
     const thr=(h.threshold==="slider")?state.cutoff:h.threshold;
-    const shapes=(thr==null)?[]:[{type:"line",x0:thr,x1:thr,yref:"paper",y0:0,y1:1,line:{color:"#c0392b",width:2,dash:"dash"}}];
-    Plotly.react("hist-"+col, [{x:h.centers,y:frac,type:"bar",marker:{color:"#0f766e"},
+    const shapes=(thr==null)?[]:[{type:"line",x0:thr,x1:thr,yref:"paper",y0:0,y1:1,line:{color:"#b5852a",width:2,dash:"dash"}}];
+    Plotly.react("hist-"+col, [{x:h.centers,y:frac,type:"bar",marker:{color:"#8a1f2b"},
       hovertemplate:"%{x}: %{y:.1%}<extra></extra>"}],
       baseLayout({margin:{l:54,r:14,t:24,b:42}, shapes:shapes,
-        xaxis:{title:{text:h.title,font:{size:11}},gridcolor:"#f8fafc"},
-        yaxis:{tickformat:".0%",gridcolor:"#f1f5f9"}}), CFG);
+        xaxis:{title:{text:h.title,font:{size:11}},gridcolor:"#f6efe9"},
+        yaxis:{tickformat:".0%",gridcolor:"#ece1d9"}}), CFG);
   });
 }
 const DRAW = {"p-vt":drawVt, "p-comp":drawComp, "p-trend":drawTrends, "p-dist":drawDist};
 
-function showPanel(id){
+function showPanel(id, writeHash){
   if(!DRAW[id]) id="p-vt";
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active', x.dataset.tab===id));
   document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active', x.id===id));
   active = id;
-  try{ location.hash = id; }catch(e){}
+  // Only reflect the panel in the URL hash on an actual tab CLICK (which happens post-load,
+  // so replaceState there never triggers a scroll). Writing the hash during init would add a
+  // #panel fragment that the browser "scroll-to-fragment"s at the load event — landing ~285px
+  // down, with the header/tabs pushed under the sticky bar. That was the real bug.
+  if(writeHash){ try{ history.replaceState(null, '', '#'+id); }catch(e){} }
+  window.scrollTo(0, 0);
   DRAW[id]();
 }
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showPanel(t.dataset.tab));
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showPanel(t.dataset.tab, true));
 
 // ---------- Controls ----------
 document.getElementById('vt-slider').oninput = e => {
@@ -753,9 +791,20 @@ weekSel.onchange  = ()=>{ if(weekSel.value!=="all") monthSel.value="all"; applyP
 sevSel.onchange   = ()=>{ state.severity=sevSel.value; setText(); setHeaderAndTable(); DRAW[active](); };
 
 // ---------- Init ----------
+if(history.scrollRestoration){ history.scrollRestoration = 'manual'; }
 monthSel.disabled = weekSel.disabled = true;
 setText(); setHeaderAndTable();
-showPanel((location.hash||"#p-vt").slice(1));
+var initId=(location.hash||"#p-vt").slice(1);
+// Strip any incoming fragment BEFORE load completes so the browser's load-time
+// "scroll to fragment" can't fire (e.g. arriving at 04_lpv_dashboard.html#p-comp).
+try{ history.replaceState(null, '', location.pathname+location.search); }catch(e){}
+showPanel(initId, false);          // select + draw, but do NOT write the hash on init
+// Backstop: re-assert the top after the browser's own load / anchor / bfcache scrolling,
+// which can run after init. setTimeout(0) lands after the load event's synchronous scroll.
+function toTop(){ window.scrollTo(0, 0); }
+requestAnimationFrame(toTop);
+window.addEventListener('load', ()=>{ toTop(); requestAnimationFrame(toTop); setTimeout(toTop, 0); });
+window.addEventListener('pageshow', ()=>{ toTop(); requestAnimationFrame(toTop); });
 """
 
 # Big-number / card / hist DOM built server-side, charts filled by JS
@@ -776,10 +825,15 @@ ch = cohort_headline
 BODY = f"""
 <div class="wrap">
 <header class="sticky">
-  <a href="05_scorecard.html" style="display:inline-block;font-size:12px;color:#8a1f2b;text-decoration:none;font-weight:700;margin-bottom:4px">← CLIF ICU Ventilator QI Bundle</a>
-  <h1>Lung-Protective Ventilation Adherence — {SITE}</h1>
-  <p class="sub" id="cohort-line">{ch['n_patient_days']:,} IMV-on-ICU patient-days · {ch['n_hosps']:,} hospitalizations · {ch['n_patients']:,} patients (all time)</p>
-  <p class="sub" style="margin-top:1px">{ch['day_min']} → {ch['day_max']} · Descriptive; component-separated, each measure on its own denominator.</p>
+  <div class="brandrow">
+    {f'<img class="logo" src="{LOGO_IMG}" alt="CLIF">' if LOGO_IMG else ''}
+    <div class="titleblock">
+      <a class="backlink" href="05_scorecard.html">← CLIF ICU Ventilator QI Bundle</a>
+      <h1>Lung-Protective Ventilation Adherence — {SITE}</h1>
+      <p class="sub" id="cohort-line">{ch['n_patient_days']:,} IMV-on-ICU patient-days · {ch['n_hosps']:,} hospitalizations · {ch['n_patients']:,} patients (all time)</p>
+      <p class="sub" style="margin-top:1px">{ch['day_min']} → {ch['day_max']} · Descriptive; component-separated, each measure on its own denominator.</p>
+    </div>
+  </div>
   <div class="slider-bar">
     <label>Tidal volume cutoff</label>
     <input type="range" id="vt-slider" min="{VT_GRID[0]}" max="{VT_GRID[-1]}" step="0.5" value="{VT_DEFAULT}">
@@ -844,10 +898,10 @@ BODY = f"""
   <div class="section">
     <h2>Settings distributions <span class="fig-caption" style="font-weight:400">(time-weighted by minutes on IMV)</span></h2>
     <div class="grid3">{hist_divs}</div>
-    <p class="fig-caption">Red dashed line = threshold. Tidal-volume line follows the slider; plateau (30) and ∆P (15) are fixed.</p>
+    <p class="fig-caption">Gold dashed line = threshold. Tidal-volume line follows the slider; plateau (30) and ∆P (15) are fixed.</p>
   </div>
   <div class="section">
-    <h2>Cohort — Table 1<span id="t1-period" style="font-weight:400;color:#64748b"></span></h2>
+    <h2>Cohort — Table 1<span id="t1-period" style="font-weight:400;color:#9a8c86"></span></h2>
     <p class="fig-caption">Hospitalizations with ≥1 ventilated ICU patient-day in the selected period.</p>
     <div id="table1-box">{table1_html}</div>
   </div>

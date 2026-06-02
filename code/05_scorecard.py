@@ -164,6 +164,11 @@ def _load_tile_img(stem, px=180):
 TILE_IMG = {k: _load_tile_img(v) for k, v in _IMG_FILE.items()}
 print(f"[img] tile illustrations embedded: {sum(1 for v in TILE_IMG.values() if v)}/{len(TILE_IMG)}")
 
+# Brand logo for the top-left (icon + CLIF wordmark). Embedded at high res, CSS-scaled
+# down so it stays crisp on retina; falls back to an inline SVG mark if missing.
+LOGO_IMG = _load_tile_img("clif_logo_v2", px=480)
+print(f"[img] brand logo embedded: {'yes' if LOGO_IMG else 'no (using SVG fallback)'}")
+
 print("[3] Writing 05_scorecard.html ...")
 latest = weeks[-1]
 week_opts = "".join(f'<option value="{w}">{html.escape(week_label[w])}</option>' for w in reversed(weeks))
@@ -177,15 +182,16 @@ CSS = """
 body{margin:0;font-family:Inter,-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--cream);
 color:var(--ink);}
 .wrap{max-width:1500px;margin:0 auto;padding:22px 28px 40px;}
-header.top{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:6px;}
-.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:20px;color:var(--maroon);letter-spacing:.5px;}
-.brand svg{width:26px;height:26px}
-h1{font-size:17px;font-weight:700;color:var(--maroon-d);margin:0;letter-spacing:.4px;text-transform:uppercase;}
-.chips{display:flex;gap:10px;margin-left:auto;align-items:center;flex-wrap:wrap;}
-.chip{display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);
-border-radius:999px;padding:6px 12px;font-size:13px;box-shadow:0 1px 2px rgba(120,30,40,.05);}
-.chip b{color:var(--maroon);text-transform:uppercase;font-size:11px;letter-spacing:.6px;}
-.chip select{border:0;background:transparent;font-size:13px;color:var(--ink);font-weight:600;cursor:pointer;outline:none;}
+header.top{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:6px;}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:28px;color:var(--maroon);letter-spacing:.5px;}
+.brand img{height:72px;width:auto;display:block;}
+.brand svg{width:34px;height:34px}
+h1{font-size:23px;font-weight:700;color:var(--maroon-d);margin:0;letter-spacing:.4px;text-transform:uppercase;}
+.chips{display:flex;gap:11px;margin-left:auto;align-items:center;flex-wrap:wrap;}
+.chip{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
+border-radius:999px;padding:9px 16px;font-size:15px;box-shadow:0 1px 2px rgba(120,30,40,.05);}
+.chip b{color:var(--maroon);text-transform:uppercase;font-size:12.5px;letter-spacing:.6px;}
+.chip select{border:0;background:transparent;font-size:15px;color:var(--ink);font-weight:600;cursor:pointer;outline:none;}
 .subtitle{color:var(--muted);font-size:13px;margin:2px 0 22px;}
 .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;}
 @media(max-width:1200px){.grid{grid-template-columns:repeat(2,1fr)}}
@@ -260,7 +266,7 @@ DONUT_SVG = ('<svg viewBox="0 0 128 128"><circle cx="64" cy="64" r="56" fill="no
 BODY = f"""
 <div class="wrap">
 <header class="top">
-  <div class="brand">{HEART}<span>CLIF</span></div>
+  <div class="brand">{f'<img src="{LOGO_IMG}" alt="CLIF">' if LOGO_IMG else HEART + '<span>CLIF</span>'}</div>
   <h1>ICU Ventilator QI Dashboard — {html.escape(SITE)}</h1>
   <div class="chips">
     <div class="chip"><b>Unit</b><select id="sel-unit">{unit_sel}</select></div>
