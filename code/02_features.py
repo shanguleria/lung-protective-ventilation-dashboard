@@ -227,9 +227,12 @@ pieces["mode_eligible"] = pieces["mode_eff"].isin(ELIGIBLE_MODES)
 elig = pieces["is_imv"] & pieces["mode_eligible"]
 
 pieces["vt_per_pbw"] = pieces["tv_eff"] / pieces["pbw_kg"]
-# ∆P uses the plateau-concurrent PEEP (peep_dp_eff). Impossible negatives (plateau < PEEP, from
-# residual same-row noise) are clamped out of the computation → NaN → dp-not-assessable, not a
-# spurious pass.
+# Physiologic floor: plateau pressure cannot be below the PEEP it was measured against
+# (plateau = PEEP + driving pressure, driving pressure >= 0). Invalidate impossible low plateaus
+# → NaN, so they drop out of the plateau component, the composite, ∆P, and the plateau histogram.
+_peep_bound = pieces["peep_dp_eff"].fillna(pieces["peep_eff"])
+pieces.loc[pieces["plateau_eff"] < _peep_bound, "plateau_eff"] = np.nan
+# ∆P uses the plateau-concurrent PEEP (peep_dp_eff); any residual negative is also clamped out.
 pieces["driving_pressure"] = pieces["plateau_eff"] - pieces["peep_dp_eff"]
 pieces.loc[pieces["driving_pressure"] < 0, "driving_pressure"] = np.nan
 

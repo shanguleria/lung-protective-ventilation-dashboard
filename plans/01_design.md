@@ -46,7 +46,7 @@ A row meets the LPV bundle if **all three** simultaneously:
      - Female: PBW = 45.5 + 2.3 × (height_in − 60)
      - Unknown sex: patient-days excluded from adherence (not-assessable).
    - Height = **median of all `vitals.height_cm` readings for that hospitalization**, converted to inches. Held constant within a hospitalization.
-2. `plateau_pressure_obs ≤ 30` cm H₂O.
+2. `plateau_pressure_obs ≤ 30` cm H₂O. _(2026-06-02: **physiologic floor** — a plateau below the PEEP it was measured against is impossible (plateau = PEEP + ∆P, ∆P ≥ 0), so such values are invalidated → NaN → dropped from the plateau component, composite, ∆P, and histogram. Bound = the plateau-concurrent PEEP, falling back to current PEEP. Removed ~0.9% of plateau-time of implausible low values; Pplat adherence 86.0% → 85.8%.)_
 3. `∆P = plateau_pressure_obs − PEEP ≤ 15` cm H₂O. **PEEP here is the value recorded *with* the plateau** (`peep_obs`→`peep_set` on the plateau row), carried forward on the **same window as plateau (6h)** so ∆P references one consistent moment. _(2026-06-02: this replaced differencing plateau against the current 2h PEEP, which produced ~1% spurious negative ∆P from the timing mismatch. Negative ∆P is now clamped → NaN → dp-not-assessable.)_ The separate current `peep_eff` (2h) still feeds the PEEP distribution histogram.
 
 ---
