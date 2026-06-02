@@ -179,7 +179,14 @@ rs["fio2_eff"] = tlimited_ffill(rs, "fio2_set", CF_FAST)
 rs["plateau_eff"] = tlimited_ffill(rs, "plateau_pressure_obs", CF_SLOW)
 rs["mode_eff"] = tlimited_ffill(rs, "mode_category", CF_SLOW)
 rs["tv_eff"] = tv_obs_eff.fillna(tv_set_eff)
-rs["peep_eff"] = peep_obs_eff.fillna(peep_set_eff)
+rs["peep_eff"] = peep_obs_eff.fillna(peep_set_eff)   # current PEEP (for the PEEP distribution)
+
+# PEEP for driving pressure: the PEEP recorded WITH the plateau, carried on the SAME window as
+# plateau (CF_SLOW). This keeps ∆P = plateau − PEEP referenced to one consistent moment, avoiding
+# the timing mismatch that produced spurious negative ∆P when plateau (6h) met a fresher PEEP (2h).
+_peep_row = rs["peep_obs"].fillna(rs["peep_set"])
+rs["_peep_at_plat"] = _peep_row.where(rs["plateau_pressure_obs"].notna())
+rs["peep_dp_eff"] = tlimited_ffill(rs, "_peep_at_plat", CF_SLOW)
 
 # ----------------------------------------------------------------------------
 # Step B — Interval construction + calendar-day split (<=2 pieces; DST-safe)
@@ -198,7 +205,7 @@ start_day = local_naive.dt.normalize().dt.date
 next_day = (local_naive.dt.normalize() + pd.Timedelta(days=1)).dt.date
 
 carry = ["hospitalization_id", "device_category", "mode_eff",
-         "tv_eff", "plateau_eff", "peep_eff", "fio2_eff"]
+         "tv_eff", "plateau_eff", "peep_eff", "peep_dp_eff", "fio2_eff"]
 p1 = pd.DataFrame({c: rs[c].values for c in carry})
 p1["calendar_day"] = start_day.values
 p1["duration_min"] = (end.where(end <= next_mid, next_mid) - start).dt.total_seconds().values / 60.0
@@ -220,12 +227,16 @@ pieces["mode_eligible"] = pieces["mode_eff"].isin(ELIGIBLE_MODES)
 elig = pieces["is_imv"] & pieces["mode_eligible"]
 
 pieces["vt_per_pbw"] = pieces["tv_eff"] / pieces["pbw_kg"]
-pieces["driving_pressure"] = pieces["plateau_eff"] - pieces["peep_eff"]
+# ∆P uses the plateau-concurrent PEEP (peep_dp_eff). Impossible negatives (plateau < PEEP, from
+# residual same-row noise) are clamped out of the computation → NaN → dp-not-assessable, not a
+# spurious pass.
+pieces["driving_pressure"] = pieces["plateau_eff"] - pieces["peep_dp_eff"]
+pieces.loc[pieces["driving_pressure"] < 0, "driving_pressure"] = np.nan
 
 # present masks (each component's own denominator)
 vt_present = elig & pieces["tv_eff"].notna() & pieces["pbw_kg"].notna()
 plat_present = elig & pieces["plateau_eff"].notna()
-dp_present = elig & pieces["plateau_eff"].notna() & pieces["peep_eff"].notna()
+dp_present = elig & pieces["driving_pressure"].notna()   # plateau & concurrent PEEP present, ∆P >= 0
 comp_present = vt_present & dp_present  # Vt + plateau + PEEP all present
 
 # pass masks

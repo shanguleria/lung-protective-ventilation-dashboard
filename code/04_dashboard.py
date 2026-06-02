@@ -247,8 +247,8 @@ for m in ["plat", "dp"]:
 print("[3] Per-month histograms ...")
 HIST_SPEC = {
     "vt_per_pbw": dict(lo=0, hi=15, step=0.25, title="Tidal volume (mL/kg PBW)", thr="slider"),
-    "plateau": dict(lo=0, hi=50, step=1.0, title="Plateau pressure (cm H₂O)", thr=PLATEAU_MAX),
-    "driving_pressure": dict(lo=0, hi=40, step=1.0, title="Driving pressure ∆P (cm H₂O)", thr=DP_MAX),
+    "plateau": dict(lo=0, hi=60, step=1.0, title="Plateau pressure (cm H₂O)", thr=PLATEAU_MAX),
+    "driving_pressure": dict(lo=0, hi=50, step=1.0, title="Driving pressure ∆P (cm H₂O)", thr=DP_MAX),
     "peep": dict(lo=0, hi=30, step=1.0, title="PEEP (cm H₂O)", thr=None),
     "fio2": dict(lo=0.2, hi=1.0, step=0.05, title="FiO₂", thr=None),
 }
@@ -261,11 +261,13 @@ for col, spec in HIST_SPEC.items():
     by_sev = {}
     for s in SEVS:
         counts = [[0.0] * nb for _ in range(n_m)]
-        sub_s = iv[iv[col].notna() & (iv["severity"] == s)]
+        # Drop out-of-range values (don't clip) so the tails taper instead of piling into the edge bins.
+        sub_s = iv[iv[col].notna() & (iv["severity"] == s)
+                   & (iv[col] >= spec["lo"]) & (iv[col] < spec["hi"])]
         for mo, g in sub_s.groupby("month"):
             if mo not in midx:
                 continue
-            cnt, _ = np.histogram(g[col].clip(spec["lo"], spec["hi"] - 1e-9), bins=edges, weights=g["duration_min"])
+            cnt, _ = np.histogram(g[col], bins=edges, weights=g["duration_min"])
             counts[midx[mo]] = [round(float(x), 1) for x in cnt]
         by_sev[s] = counts
     histc[col] = {"centers": centers, "title": spec["title"], "threshold": spec["thr"], "counts": by_sev}
