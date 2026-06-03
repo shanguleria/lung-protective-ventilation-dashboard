@@ -2,14 +2,14 @@
 #
 # refresh_scorecard.sh — re-render the QI bundle scorecard ONLY (no CLIF re-read).
 #
-# Runs just step 05, which is registry-driven: it reads every feed listed in
+# Runs just the scorecard combiner, which is registry-driven: it reads every feed listed in
 # config.json -> scorecard_tiles (e.g. ../proning/..., ../Sedation/sat_dashboard/...),
 # validates each (schema_version == 1 + PHI-free), copies each feed's detail dashboard
 # into output/dashboard/ so its "View details ->" link resolves, and rebuilds
-# output/dashboard/scorecard.html. Reuses the existing output/*.parquet artifacts, so it
-# is fast and safe to run anytime a sibling repo re-emits its tile feed.
+# output/dashboard/scorecard.html. Reuses the existing metrics/lpv/output/*.parquet artifacts,
+# so it is fast and safe to run anytime a sibling repo re-emits its tile feed.
 #
-# To rebuild the underlying LPV data first, run ./run_pipeline.sh (01 -> 05) instead.
+# To rebuild the underlying LPV data first, run ./run_pipeline.sh (01 -> scorecard) instead.
 #
 # Usage:
 #   ./refresh_scorecard.sh
@@ -29,13 +29,13 @@ if [[ ! -f config.json ]]; then
   echo "    cp config.example.json config.json   # then set clif_data_path, site, timezone"
   exit 1
 fi
-if [[ ! -f output/02_patient_day_status.parquet ]]; then
-  echo "ERROR: output/02_patient_day_status.parquet not found — the LPV pipeline hasn't been built."
+if [[ ! -f metrics/lpv/output/02_patient_day_status.parquet ]]; then
+  echo "ERROR: metrics/lpv/output/02_patient_day_status.parquet not found — the LPV pipeline hasn't been built."
   echo "    Run the full pipeline first:  ./run_pipeline.sh"
   exit 1
 fi
 
-"$PY" code/05_scorecard.py
+"$PY" scorecard/build_scorecard.py
 
 echo ""
 echo "Done. Open the QI scorecard:  output/dashboard/scorecard.html"

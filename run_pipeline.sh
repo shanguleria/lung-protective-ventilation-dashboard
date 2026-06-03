@@ -34,12 +34,12 @@ if [[ ! -f config.json ]]; then
 fi
 
 steps=(
-  "code/01_cohort.py"
-  "code/02_features.py"
-  "code/02d_severity.py"
-  "code/03_aggregate.py"
-  "code/04_dashboard.py"
-  "code/05_scorecard.py"
+  "metrics/lpv/code/01_cohort.py"
+  "metrics/lpv/code/02_features.py"
+  "metrics/lpv/code/02d_severity.py"
+  "metrics/lpv/code/03_aggregate.py"
+  "metrics/lpv/code/04_dashboard.py"
+  "scorecard/build_scorecard.py"
 )
 
 for step in "${steps[@]}"; do

@@ -4,6 +4,5 @@
   "timezone": "US/Central",
   "site": "YourSite",
   "clif_version": "2.1.0",
-  "output_path": "output",
   "scorecard_tiles": []
 }

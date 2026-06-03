@@ -29,9 +29,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[3]            # bundle root (shared config.json)
+_METRIC_ROOT = Path(__file__).resolve().parents[1]    # metrics/lpv (per-metric outputs)
 CFG = json.loads((ROOT / "config.json").read_text())
-OUT_DIR = Path(CFG.get("output_path", ROOT / "output"))
+OUT_DIR = Path(CFG.get("output_path", _METRIC_ROOT / "output"))
 
 # Params (mirror 02_features.py / 02b_vt_sensitivity.py)
 ADHERENCE_FRACTION = 0.80

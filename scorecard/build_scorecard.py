@@ -40,11 +40,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]              # bundle root (scorecard/ is one level down)
 CFG = json.loads((ROOT / "config.json").read_text())
-OUT_DIR = Path(CFG.get("output_path", ROOT / "output"))
 SITE = CFG.get("site", "Your Site")
-DASH_DIR = OUT_DIR / "dashboard"            # the shippable, cross-linked HTML bundle
+LPV_OUT = ROOT / "metrics" / "lpv" / "output"           # LPV pipeline parquets live here now
+DASH_DIR = ROOT / "output" / "dashboard"                # shared shippable bundle (scorecard + drill-downs)
 DASH_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- Named parameters ----
@@ -74,11 +74,11 @@ UNIT_LABEL = {"__ALL__": "All ICUs", "medical_icu": "Medical ICU",
 # ----------------------------------------------------------------------------
 
 print("[1] Loading + computing Vt<=8 per patient-day ...")
-status = pd.read_parquet(OUT_DIR / "02_patient_day_status.parquet")
+status = pd.read_parquet(LPV_OUT / "02_patient_day_status.parquet")
 status["hospitalization_id"] = status["hospitalization_id"].astype(str)
 status["calendar_day"] = pd.to_datetime(status["calendar_day"]).dt.date
 
-iv = pd.read_parquet(OUT_DIR / "02_intervals.parquet")
+iv = pd.read_parquet(LPV_OUT / "02_intervals.parquet")
 iv["hospitalization_id"] = iv["hospitalization_id"].astype(str)
 iv["calendar_day"] = pd.to_datetime(iv["calendar_day"]).dt.date
 key = ["hospitalization_id", "calendar_day"]
@@ -89,7 +89,7 @@ vt8_in = iv["duration_min"].where(vt_present & (iv["vt_per_pbw"] <= SCORECARD_VT
 vt = pd.DataFrame({"vt_assess_min": vt_assess, "vt8_in_min": vt8_in}).reset_index()
 vt.columns = key + ["vt_assess_min", "vt8_in_min"]
 
-sev = pd.read_parquet(OUT_DIR / "02d_severity.parquet")[["hospitalization_id", "calendar_day", "severity"]]
+sev = pd.read_parquet(LPV_OUT / "02d_severity.parquet")[["hospitalization_id", "calendar_day", "severity"]]
 sev["hospitalization_id"] = sev["hospitalization_id"].astype(str)
 sev["calendar_day"] = pd.to_datetime(sev["calendar_day"]).dt.date
 
@@ -241,7 +241,7 @@ print(f"  feeds ready: {[f['metric_id'] for f in feeds]}")
 # 3. Tile illustrations / icons (downscale + base64-embed; SVG fallback) + brand logo
 # ----------------------------------------------------------------------------
 
-IMG_DIR = ROOT / "references" / "images"
+IMG_DIR = ROOT / "assets"
 _IMG_FILE = {"lpv": "LPV", "sat": "SAT", "sbt": "SBT", "prone": "Proning", "mob": "Mobilization"}
 
 

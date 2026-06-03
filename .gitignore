@@ -12,8 +12,10 @@ config.json
 .claude/
 plans/
 
-# Scorecard tile artwork (local; the scorecard falls back to inline SVG icons without them)
-references/images/
+# Brand/tile artwork (local; the scorecard + dashboard fall back to inline SVG without them).
+# NOTE: kept out of the public repo because the illustrations are borrowed from the design
+# inspiration. Revisit in Phase 4 if we license/replace them and want clones to render branded.
+assets/
 
 # Generated outputs and intermediate data — kept out of git
 output/

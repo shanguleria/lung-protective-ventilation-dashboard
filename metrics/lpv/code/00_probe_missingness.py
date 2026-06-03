@@ -34,7 +34,8 @@ from clifpy.tables import Patient, Hospitalization, RespiratorySupport, Vitals
 # Config
 # ----------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[3]            # bundle root (shared config.json)
+_METRIC_ROOT = Path(__file__).resolve().parents[1]    # metrics/lpv (per-metric outputs)
 with open(ROOT / "config.json") as f:
     CFG = json.load(f)
 
@@ -42,7 +43,7 @@ DATA_DIR = CFG["clif_data_path"]
 FILETYPE = CFG.get("filetype", "parquet")
 TZ = CFG.get("timezone", "US/Central")
 SITE = CFG.get("site", "UChicago")
-OUT_DIR = Path(CFG.get("output_path", ROOT / "output"))
+OUT_DIR = Path(CFG.get("output_path", _METRIC_ROOT / "output"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
