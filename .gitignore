@@ -16,6 +16,7 @@ plans/
 # NOTE: kept out of the public repo because the illustrations are borrowed from the design
 # inspiration. Revisit in Phase 4 if we license/replace them and want clones to render branded.
 assets/
+metrics/*/references/images/
 
 # Generated outputs and intermediate data — kept out of git
 output/

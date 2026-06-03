@@ -1,0 +1,68 @@
+{
+  "site": "<YourSite>",
+  "timezone": "US/Central",
+  "primary_dataset": {
+    "name": "<YourSite>_CLIF",
+    "clif_version": "2.1.0",
+    "data_path": "/path/to/CLIF/data",
+    "file_format": "parquet"
+  },
+  "secondary_dataset": {
+    "name": "MIMIC_IV_CLIF",
+    "clif_version": "1.1.0",
+    "data_path": "/path/to/MIMIC_IV_CLIF",
+    "file_format": "parquet",
+    "role": "external_validation_only"
+  },
+  "tables_in_use": [
+    "patient",
+    "hospitalization",
+    "adt",
+    "respiratory_support",
+    "medication_admin_continuous",
+    "medication_admin_intermittent",
+    "vitals",
+    "patient_assessments"
+  ],
+
+  "_comment_sat_medications": "Run code/00_probe_documentation.py FIRST to confirm your site's continuous med_category values, then edit these. SAT-relevant set = drugs whose infusion must be at rate 0 for a SAT (GABAergic sedatives + opioids). Dexmedetomidine is allowed to continue and is NOT in the SAT-relevant set. Paralytics define an exclusion (NMB day). Add benzo/opioid infusions your site charts continuously (e.g. lorazepam) if present.",
+  "sat_medications": {
+    "sedative_analgesic_categories": [
+      "propofol",
+      "midazolam",
+      "fentanyl",
+      "hydromorphone",
+      "morphine",
+      "remifentanil",
+      "ketamine"
+    ],
+    "dexmedetomidine_categories": [
+      "dexmedetomidine"
+    ],
+    "paralytic_categories": [
+      "cisatracurium",
+      "vecuronium",
+      "rocuronium"
+    ]
+  },
+
+  "sat_eligibility": {
+    "exclude_paralytic_days": true,
+    "dex_only_days": "exclude"
+  },
+
+  "sat_observation": {
+    "hold_min_minutes": 30,
+    "zero_dose_sources": ["dose_zero", "mar_action_stop"],
+    "require_resume": false,
+    "kress_half_dose_threshold": 0.5
+  },
+
+  "reporting": {
+    "unit_attribution_anchor": "day_icu_location",
+    "small_cell_min_den": 10,
+    "denominator_mode": "documented_plus_bound"
+  },
+
+  "output_path": "./output"
+}

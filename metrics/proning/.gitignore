@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.DS_Store
+
+# Site-specific configuration (paths, credentials)
+config/config.json
+
+# Analysis outputs — large, often contain per-patient info
+output/
+
+# Editor / IDE
+.vscode/
+.idea/

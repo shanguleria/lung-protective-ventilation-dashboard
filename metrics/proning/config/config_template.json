@@ -1,0 +1,41 @@
+{
+  "site": "<YourSite>",
+  "timezone": "US/Central",
+  "primary_dataset": {
+    "name": "<YourSite>_CLIF",
+    "clif_version": "2.1.0",
+    "data_path": "/path/to/CLIF/data",
+    "file_format": "parquet"
+  },
+  "secondary_dataset": {
+    "name": "MIMIC_IV_CLIF",
+    "clif_version": "1.1.0",
+    "data_path": "/path/to/MIMIC_IV_CLIF",
+    "file_format": "parquet",
+    "role": "external_validation_only"
+  },
+  "tables_in_use": [
+    "patient",
+    "hospitalization",
+    "adt",
+    "respiratory_support",
+    "labs",
+    "position",
+    "patient_assessments"
+  ],
+  "proning_eligibility": {
+    "pf_max": 150,
+    "fio2_min": 0.6,
+    "peep_min": 5,
+    "sustained_hours": 12
+  },
+  "proning_observation": {
+    "session_gap_minutes": 60,
+    "adherent_session_hours": 16
+  },
+  "reporting": {
+    "unit_attribution_anchor": "T_eligible",
+    "small_cell_min_den": 10
+  },
+  "output_path": "./output"
+}
