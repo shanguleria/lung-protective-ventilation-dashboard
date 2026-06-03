@@ -8,8 +8,9 @@ __pycache__/
 # Site-specific config (each site copies config.example.json -> config.json)
 config.json
 
-# Internal working logs (not part of the shared template)
+# Internal working logs and design docs (not part of the shared template)
 .claude/
+plans/
 
 # Scorecard tile artwork (local; the scorecard falls back to inline SVG icons without them)
 references/images/
