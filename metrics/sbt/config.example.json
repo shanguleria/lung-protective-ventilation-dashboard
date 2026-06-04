@@ -1,0 +1,85 @@
+{
+  "site": "<YourSite>",
+  "timezone": "US/Central",
+  "primary_dataset": {
+    "name": "<YourSite>_CLIF",
+    "clif_version": "2.1.0",
+    "data_path": "/path/to/CLIF/data",
+    "file_format": "parquet"
+  },
+  "secondary_dataset": {
+    "name": "MIMIC_IV_CLIF",
+    "clif_version": "1.1.0",
+    "data_path": "/path/to/MIMIC_IV_CLIF",
+    "file_format": "parquet",
+    "role": "external_validation_only"
+  },
+  "tables_in_use": [
+    "patient",
+    "hospitalization",
+    "adt",
+    "respiratory_support",
+    "medication_admin_continuous",
+    "vitals"
+  ],
+
+  "_comment_cohort": "SBT = ventilated-ICU patient-days (IMV ∩ ICU, day-expanded). seed_cache_from may point at a sibling metric's warm _cache (resp_waterfall + stitched adt/hosp/encounter_mapping) to reuse the expensive respiratory_support waterfall; set to null to build the full ICU∩IMV waterfall from scratch (slower, but the complete cohort).",
+  "cohort": {
+    "seed_cache_from": null
+  },
+
+  "_comment_sbt_modes": "Run code/00_probe_documentation.py FIRST to confirm your site's respiratory_support mode_category strings. CONTROLLED ventilation gates the >=12h eligibility clock; SUPPORT (pressure support/cpap) is the SBT target mode.",
+  "sbt_modes": {
+    "controlled_modes": [
+      "assist control-volume control",
+      "pressure control",
+      "pressure-regulated volume control",
+      "simv"
+    ],
+    "support_modes": [
+      "pressure support/cpap"
+    ]
+  },
+
+  "_comment_sbt_eligibility": "Jain et al.: eligible vent-ICU day = >=12h controlled vent accrued AND a >=2h contiguous stable window (FiO2<=0.50 fraction, PEEP<=8, SpO2>=88, NE-equiv<=0.2 mcg/kg/min) AND not tracheostomized that day.",
+  "sbt_eligibility": {
+    "controlled_min_hours": 12,
+    "stability_min_hours": 2,
+    "fio2_max": 0.50,
+    "peep_max": 8,
+    "spo2_min": 88,
+    "ne_equiv_max_mcg_kg_min": 0.2,
+    "exclude_trach_days": true
+  },
+
+  "_comment_sbt_vasopressors": "Standard published norepinephrine-equivalent factors (mcg/kg/min unless noted). Swap to your reference standard or Jain's exact table. Vasopressin factor applies to u/min directly (not weight-normalized). Inotropes default to 0.",
+  "sbt_vasopressors": {
+    "ne_equivalent_factors": {
+      "norepinephrine": 1.0,
+      "epinephrine": 1.0,
+      "phenylephrine": 0.1,
+      "dopamine": 0.01,
+      "vasopressin": 2.5,
+      "dobutamine": 0.0,
+      "milrinone": 0.0,
+      "isoproterenol": 0.0,
+      "angiotensin": 0.0
+    },
+    "vasopressin_categories": ["vasopressin"]
+  },
+
+  "_comment_sbt_observation": "SBT delivered = a controlled->support transition that day sustained >=support_min_minutes, PEEP<=ps_peep_max (pressure support) or PEEP<=cpap_peep_max (CPAP). Transition-only.",
+  "sbt_observation": {
+    "support_min_minutes": 2,
+    "ps_peep_max": 8,
+    "cpap_peep_max": 5,
+    "require_transition": true
+  },
+
+  "reporting": {
+    "unit_attribution_anchor": "day_icu_location",
+    "small_cell_min_den": 10
+  },
+
+  "output_path": "./output"
+}
