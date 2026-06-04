@@ -555,6 +555,8 @@ box-shadow:0 3px 16px rgba(120,30,40,.06);}}
 header.top{{display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);
 padding-bottom:18px;margin-bottom:8px;}}
 header.top img{{height:72px;width:auto;display:block;flex:0 0 auto;}}
+.backlink{{display:inline-block;font-size:12.5px;color:var(--maroon);text-decoration:none;font-weight:700;margin-bottom:4px;}}
+.backlink:hover{{text-decoration:underline;}}
 h1{{font-size:27px;font-weight:800;color:var(--maroon-d);margin:0;letter-spacing:-.3px;}}
 .sub{{color:var(--muted);font-size:13px;margin-top:3px;}}
 h2{{font-size:19px;font-weight:700;color:var(--maroon-d);border-bottom:1px solid var(--line);
@@ -614,7 +616,8 @@ border-top:1px solid var(--line);padding-top:14px;}}
 <title>SAT Adherence QI — {html.escape(ctx['site'])}</title><style>{css}</style></head><body>
 <div class="wrap">
   <header class="top">{brand}
-    <div><h1>Spontaneous Awakening Trial — Quality-of-Care</h1>
+    <div><a class="backlink" href="scorecard.html">← CLIF ICU Ventilator QI Bundle</a>
+    <h1>Spontaneous Awakening Trial — Quality-of-Care</h1>
     <div class="sub">Daily sedation-interruption adherence · {html.escape(ctx['site'])} ·
     generated {html.escape(ctx['generated'])}</div></div>
   </header>
