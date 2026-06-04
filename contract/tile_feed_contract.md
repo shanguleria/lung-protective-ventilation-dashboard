@@ -117,18 +117,26 @@ The scorecard has global **Unit** and **Week/Month** chips. A coarse feed opts o
 | User selects | Feed provides | Tile shows | Badge |
 |---|---|---|---|
 | unit = Neuro ICU | `units: ["__ALL__"]` only | site-wide value | `· site-wide` |
+| week = 2023-W42 | `periods: ["all","month"]` (no week) | the week's **containing month** | `· Oct 2023 · month` |
 | week = 2023-W42 | `periods: ["all"]` only | all-time value | `· all-time` |
 | unit = All, period = all | (any) | exact value | none |
 
-Rule: when the selected slice isn't in the feed's `grain`, the scorecard **falls back to the coarsest
-cell the feed does provide** (`__ALL__` / `all`) and renders a small badge so the number is never
-silently mislabeled. (This directly implements the global "no silent caps / label what was dropped"
-principle.)
+Rule: when the selected slice isn't in the feed's `grain`, the scorecard **falls back to the finest
+cell the feed does provide that still contains the selection**, and renders a small badge so the number
+is never silently mislabeled:
+- A **week** pick on a feed with monthly (but not weekly) grain resolves to the week's **containing
+  month** (ISO-week Thursday → `YYYY-MM`), so the tile tracks the timeline instead of freezing on
+  all-time, and never exposes a noisy single-week denominator. (Used by proning — see below.)
+- Otherwise it drops to the coarsest cell (`__ALL__` / `all`).
 
-**Proning is expected to be coarse:** only ~350 ever-proned patients across *all* time at UChicago, so
-per-unit-per-week cells would be near-empty and misleading. Ship proning as `units:["__ALL__"]`,
-`periods:["all"]` (optionally add `"month"` if monthly counts stay non-trivial). LPV stays fine-grained
-(`all 7 units`, `["all","month","week"]`).
+(This directly implements the global "no silent caps / label what was dropped" principle.)
+
+**Proning is intentionally month-coarse:** only ~350 ever-proned (1,854 eligible) across *all* time at
+UChicago, so per-week cells are near-empty/misleading (≈96% of weeks have <10 eligible). Proning ships
+`periods:["all","month"]`; on a week pick the scorecard resolves it to the containing month via the
+fallback above (badge `· Mon YYYY · month`) — never a single-week denominator. **LPV, SAT, and SBT carry
+true weekly grain** (`["all","month","week"]`; SAT/SBT weekly denominators are robust — `__ALL__` medians
+~171 and ~114 patient-days/week respectively), so they answer week picks exactly.
 
 ---
 

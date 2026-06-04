@@ -76,9 +76,10 @@ is a dashboard figure + site-summary rows only — it stays **off** the headline
   `adt`); a day with no ICU `location_type` → `"unknown"` (folded into `__ALL__` for the tile).
 - **Time period** keys by the patient-day's calendar date: month `"YYYY-MM"`, ISO week `"YYYY-Www"`.
   Each granularity partitions the patient-days exactly.
-- Tile-feed grain target: `units:[__ALL__ + canonical ICU slugs present]`, `periods:["all","month"]`
-  (fall back to `["__ALL__"]`/`["all"]` if N is sparse). Slices below
-  `reporting.small_cell_min_den` are grayed, not hidden.
+- Tile-feed grain: `units:[__ALL__ + canonical ICU slugs present]`, `periods:["all","month","week"]`
+  (weekly added 2026-06-04 — SAT weekly denominators are robust, `__ALL__` median ~171 patient-days/week,
+  so the scorecard answers week picks exactly). Slices below `reporting.small_cell_min_den` are grayed,
+  not hidden.
 
 ---
 

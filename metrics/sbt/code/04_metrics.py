@@ -147,15 +147,16 @@ def build_summary_rows(site: str, m: dict) -> pd.DataFrame:
 def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame, diag: dict) -> dict:
     units = ["__ALL__"] + [u for u in CANONICAL_UNITS if u in set(slices["unit"])]
     months = sorted(slices.loc[slices["granularity"] == "month", "period"].unique())
+    weeks = sorted(slices.loc[slices["granularity"] == "week", "period"].unique())
     by_key = {(r.unit, "all" if r.granularity == "all" else r.period): r
               for r in slices.itertuples(index=False)
-              if r.granularity in ("all", "month")}
+              if r.granularity in ("all", "month", "week")}
 
     def cells(num_col, den_col, with_n=False):
         out = {}
         for u in units:
             pc = {}
-            for p in ["all"] + months:
+            for p in ["all"] + months + weeks:
                 r = by_key.get((u, p))
                 if r is None:
                     continue
@@ -187,7 +188,7 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame, diag: dict) -> dic
                  f"controlled→support transition (pressure support/CPAP, PEEP≤8 / CPAP≤5) sustained "
                  f"≥2 min. {native_clause}delivery is a lower bound where charting is hourly; CPAP "
                  f"pressure read from PEEP (no CLIF CPAP column). Trached patients excluded."),
-        "grain": {"units": units, "periods": ["all", "month"]},
+        "grain": {"units": units, "periods": ["all", "month", "week"]},
         "headline": {
             "label": "SBT delivered",
             "den_label": "of eligible vent-days",
@@ -296,7 +297,8 @@ def main() -> None:
     log.info("patients ever SBT / eligible:  %6d / %d (%.1f%%)", n_pts_sbt, n_pts_elig,
              100 * _rate(n_pts_sbt, n_pts_elig) if n_pts_elig else 0)
     log.info("wrote: metrics_site_summary.csv, metrics_slices.csv, tile_feed_sbt.json "
-             "(PHI-free; grain units=%d periods=all,month)", len(feed["grain"]["units"]))
+             "(PHI-free; grain units=%d periods=%s)",
+             len(feed["grain"]["units"]), ",".join(feed["grain"]["periods"]))
 
 
 if __name__ == "__main__":

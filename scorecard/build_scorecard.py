@@ -151,6 +151,10 @@ months = _ui["months"]
 month_label = _ui["month_label"]
 units = _ui["units"]
 
+# Map each ISO week -> its containing calendar month (the week's Thursday, ISO canonical),
+# so a month-only feed (e.g. proning) can resolve a week pick to its month instead of all-time.
+week_month = {w: datetime.strptime(w + "-4", "%G-W%V-%u").strftime("%Y-%m") for w in weeks}
+
 # ----------------------------------------------------------------------------
 # 3. Tile illustrations / icons (downscale + base64-embed; SVG fallback) + brand logo
 # ----------------------------------------------------------------------------
@@ -205,6 +209,7 @@ payload = {
     "placeholders": PLACEHOLDER_META,
     "iconHtml": ICON_HTML,
     "weeks": weeks, "week_label": week_label, "months": months, "month_label": month_label,
+    "week_month": week_month,
     "units": units, "unit_label": UNIT_LABEL,
     "generated": datetime.now().isoformat(timespec="minutes"),
 }
@@ -291,7 +296,7 @@ BODY = f"""
   <h1>ICU Ventilator QI Dashboard — {html.escape(SITE)}</h1>
   <div class="chips">
     <div class="chip"><b>Unit</b><select id="sel-unit">{unit_sel}</select></div>
-    <div class="chip"><b>Month</b><select id="sel-month"><option value="all">All time</option>{month_opts}</select></div>
+    <div class="chip"><b>Month</b><select id="sel-month"><option value="all">All time</option><option value="__wk__" hidden>—</option>{month_opts}</select></div>
     <div class="chip"><b>Week</b><select id="sel-week"><option value="all">All</option>{week_opts}</select></div>
   </div>
 </header>
@@ -325,6 +330,12 @@ function resolve(grain){
   if(unit!=='__ALL__' && !grain.units.includes(unit)){ u='__ALL__'; ub=' · site-wide'; }
   let pk, pb='';
   if(grain.periods.includes(pType)){ pk = curPeriodKey(); }
+  else if(pType==='week' && grain.periods.includes('month') && P.week_month[pKey]){
+    // week pick, feed has no weekly grain (e.g. proning): show the week's CONTAINING month
+    // rather than freezing on all-time — never a noisy <10 single-week denominator.
+    const mk = P.week_month[pKey];
+    pk = mk; pb = ' · ' + (P.month_label[mk]||mk) + ' · month';
+  }
   else { pk='all'; if(curPeriodKey()!=='all') pb=' · all-time'; }
   return {u, pk, badge: ub+pb};
 }
@@ -379,9 +390,14 @@ function tileCard(feed){
 
   let spark = '';
   if(fine){
-    const useMonth = (pType==='month'), xs = useMonth?P.months:P.weeks;
+    const hasWk = g.periods.includes('week');
+    // month axis when a month is in play (month pick, or a week pick resolved to its month on a
+    // weekless feed like proning); otherwise the feed's finest axis (week if it has it, else month).
+    const onMonthAxis = (pType==='month') || (pType==='week' && !hasWk);
+    const xs = onMonthAxis ? P.months : (hasWk ? P.weeks : P.months);
     const ys = xs.map(b => rate((feed.headline.cells[R.u]||{})[b]));
-    spark = sparkSVG(xs, ys, (pType==='all') ? null : pKey);
+    const hi = (pType==='all') ? null : (onMonthAxis ? R.pk : pKey);
+    spark = sparkSVG(xs, ys, hi);
   }
 
   const note  = feed.note ? `<div class="tilenote">${esc(feed.note)}</div>` : '';
@@ -411,12 +427,15 @@ function render(){
 }
 
 const selU=document.getElementById('sel-unit'), selM=document.getElementById('sel-month'), selW=document.getElementById('sel-week');
-selU.value=unit; selW.value=pKey; selM.value='all';
+// Month + Week are mutually exclusive. The inactive chip shows a neutral label: Week shows 'All',
+// Month shows 'All time' — except while a Week is active, Month shows '—' (the hidden __wk__ option)
+// so it never reads as a contradictory 'All time'. Default state is the latest week.
+selU.value=unit; selW.value=pKey; selM.value='__wk__';
 selU.onchange = e=>{ unit=e.target.value; render(); };
 selM.onchange = e=>{ if(e.target.value!=='all'){ pType='month'; pKey=e.target.value; selW.value='all'; }
-                     else if(pType==='month'){ pType='all'; pKey=null; } render(); };
-selW.onchange = e=>{ if(e.target.value!=='all'){ pType='week'; pKey=e.target.value; selM.value='all'; }
-                     else if(pType==='week'){ pType='all'; pKey=null; } render(); };
+                     else { pType='all'; pKey=null; selW.value='all'; } render(); };
+selW.onchange = e=>{ if(e.target.value!=='all'){ pType='week'; pKey=e.target.value; selM.value='__wk__'; }
+                     else { pType='all'; pKey=null; selM.value='all'; } render(); };
 render();
 """
 

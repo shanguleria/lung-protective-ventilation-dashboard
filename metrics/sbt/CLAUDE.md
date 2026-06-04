@@ -78,9 +78,10 @@ parked on support all day with no controlled→support edge does **not** count.
 
 ### Unit & time-period slicing (dashboard filters)
 - **Unit** = ICU `location_type` of the patient-day (attached per day in 01).
-- **Time period** keys by the patient-day's calendar date: month `"YYYY-MM"` (tile grain
-  `["all","month"]`), ISO week `"YYYY-Www"` (dashboard only). Slices below
-  `reporting.small_cell_min_den` are grayed, not hidden.
+- **Time period** keys by the patient-day's calendar date: month `"YYYY-MM"` and ISO week
+  `"YYYY-Www"` — both in the tile grain `["all","month","week"]` (weekly added 2026-06-04; SBT weekly
+  denominators are robust, `__ALL__` median ~114 patient-days/week, so the scorecard answers week picks
+  exactly). Slices below `reporting.small_cell_min_den` are grayed, not hidden.
 
 ---
 

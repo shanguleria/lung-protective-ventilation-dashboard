@@ -161,15 +161,16 @@ def build_kress_summary(site: str, kress: pd.DataFrame, half: float, generated: 
 def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
     units = ["__ALL__"] + [u for u in CANONICAL_UNITS if u in set(slices["unit"])]
     months = sorted(slices.loc[slices["granularity"] == "month", "period"].unique())
+    weeks = sorted(slices.loc[slices["granularity"] == "week", "period"].unique())
     by_key = {(r.unit, "all" if r.granularity == "all" else r.period): r
               for r in slices.itertuples(index=False)
-              if r.granularity in ("all", "month")}
+              if r.granularity in ("all", "month", "week")}
 
     def cells(num_col, den_col, with_n=False):
         out = {}
         for u in units:
             pc = {}
-            for p in ["all"] + months:
+            for p in ["all"] + months + weeks:
                 r = by_key.get((u, p))
                 if r is None:
                     continue
@@ -197,7 +198,7 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
                  "Holds directly observed from charted dose-0 rows + mar_action stop/start. Crude "
                  "eligibility — CLIF cannot encode all SAT safety-screen exclusions (seizure, "
                  "withdrawal, ischemia, raised ICP)."),
-        "grain": {"units": units, "periods": ["all", "month"]},
+        "grain": {"units": units, "periods": ["all", "month", "week"]},
         "headline": {
             "label": "SAT performed",
             "den_label": "of eligible vent-sedation days",
@@ -300,7 +301,8 @@ def main() -> None:
     log.info("Kress resumption (all drugs):  n=%d median=%.2f <=half=%.0f%%",
              kr["n_resumptions"], kr["median_ratio"] or 0, kr["pct_at_or_below_half"] or 0)
     log.info("wrote: metrics_site_summary.csv, metrics_slices.csv, kress_summary.csv, tile_feed_sat.json "
-             "(PHI-free; grain units=%d periods=all,month)", len(feed["grain"]["units"]))
+             "(PHI-free; grain units=%d periods=%s)",
+             len(feed["grain"]["units"]), ",".join(feed["grain"]["periods"]))
 
 
 if __name__ == "__main__":
