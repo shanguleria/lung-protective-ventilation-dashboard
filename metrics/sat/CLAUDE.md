@@ -190,9 +190,10 @@ The waterfall step is checkpointed in `output/intermediate/_cache/`; re-running 
   benchmark and the canonical daily-interruption protocol.)
 - **Girard TD, et al.** (Wake Up and Breathe / ABC trial) *Lancet* 2008;371:126-34. (SAT safety screen
   and pass/fail criteria — context for the un-codable safety-screen caveat.)
-- **Bundle scorecard tile contract:** `/Users/shanguleria/Desktop/Research/CLIF/lpv/plans/02_scorecard_tile_contract.md`
+- **Bundle scorecard tile contract:** `../../contract/tile_feed_contract.md`
   — `04_metrics.py` emits `output/final/tile_feed_sat.json` (schema_version 1, PHI-free) per this
-  contract. The lpv `05_scorecard.py` ingests it via its `scorecard_tiles` config list.
-- **Sibling QI vertical (structure cloned):** `/Users/shanguleria/Desktop/Research/CLIF/proning`.
+  contract. The bundle combiner (`scorecard/build_scorecard.py`) collects it for every metric listed
+  in `config.json → metrics`. (This project now lives at `metrics/sat/` in the monorepo.)
+- **Sibling QI vertical (structure cloned):** `../proning` (now a sibling metric in the same monorepo).
 - **Dashboard design language:** `~/.claude/templates/dashboard_design_guide.md` (CLIF maroon-cream).
 - CLIF 2.1.0 schema: see the `clifpy` package.
