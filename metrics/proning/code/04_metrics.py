@@ -289,7 +289,7 @@ def build_summary_rows(site: str, cfg: dict, m: dict) -> pd.DataFrame:
     """Tidy, federation-shareable summary — counts + rates only, no row-level data."""
     rows = [
         ("ards_cohort", "ARDS cohort (one row per patient)", m["n_ards"], m["n_ards"], 1.0,
-         "DEXA_ARDS phenotype at T0"),
+         "Berlin moderate-severe ARDS phenotype at T0"),
         ("proseva_eligible", "PROSEVA-strict eligible", m["n_eligible"], m["n_ards"],
          _rate(m["n_eligible"], m["n_ards"]), "QI denominator"),
         ("ever_proned", "Ever proned / eligible (process rate; TILE HEADLINE)",

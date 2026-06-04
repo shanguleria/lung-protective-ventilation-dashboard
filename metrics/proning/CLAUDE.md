@@ -5,7 +5,7 @@
 Across CLIF consortium sites, **how often do ARDS patients who meet PROSEVA-strict eligibility for prone positioning actually receive it, and how quickly?** This is descriptive process / quality-improvement work, not a causal-effect study. Output is intended to feed a larger multi-metric ICU quality-of-care dashboard alongside other adherence indicators (LTV ventilation, sedation interruption, etc.).
 
 ### Specific aims
-1. Build an ARDS cohort (per the DEXA_ARDS phenotype).
+1. Build an ARDS cohort (Berlin moderate-severe phenotype).
 2. Among ARDS patients, identify the subset who reach PROSEVA-strict proning eligibility (the QI denominator).
 3. Among the eligible, describe (a) the proportion ever proned, (b) the proportion with an adherent (≥16 h) prone session, (c) time from eligibility to first prone session.
 4. Emit a site-aggregable summary so other consortium sites can run this code on their CLIF data and contribute results without sharing row-level data.
@@ -15,7 +15,7 @@ Across CLIF consortium sites, **how often do ARDS patients who meet PROSEVA-stri
 ## Definitions
 
 ### ARDS cohort (T₀ — first ARDS-qualifying ABG)
-Mirrors `DEXA_ARDS/code/01_build_cohort.py`. A patient enters at the first time point during a hospitalization where **all** of:
+A patient enters at the first time point during a hospitalization where **all** of:
 - age ≥ 18
 - on invasive mechanical ventilation (`device_category == "imv"`)
 - PEEP ≥ 5 cmH₂O
@@ -23,7 +23,7 @@ Mirrors `DEXA_ARDS/code/01_build_cohort.py`. A patient enters at the first time 
 - PaO₂/FiO₂ ≤ 300 mmHg
 - in an ICU location at the ABG time
 
-One row per patient (earliest T₀ across encounter blocks). Berlin imaging criteria are not used (CLIF 2.1.0 lacks structured imaging); P/F ≤ 300 is the physiologic proxy — consistent with DEXA_ARDS.
+One row per patient (earliest T₀ across encounter blocks). Berlin imaging criteria are not used (CLIF 2.1.0 lacks structured imaging); P/F ≤ 300 is the physiologic proxy for the Berlin oxygenation criterion.
 
 ### Proning eligibility (PROSEVA-strict)
 **Persistent re-evaluation interpretation** (chosen 2026-04-28 — see `plans/experimental_approach.md` Change Log).
@@ -121,16 +121,18 @@ The pipeline is **config-driven** — no hard-coded paths. Other CLIF consortium
 
 ---
 
-## Reuse from DEXA_ARDS
+## ARDS Cohort — Design Notes
 
-The cohort builder (`code/01_build_cohort.py`) is **adapted from**, not imported from, `/Users/shanguleria/Desktop/Research/CLIF/DEXA_ARDS/code/01_build_cohort.py`. Adapted in this repo so the project is self-contained for federated use.
+The cohort builder (`code/01_build_cohort.py`) is fully self-contained — no
+cross-project imports — so any CLIF site can run it against its own data for
+federated use.
 
-Trial-specific machinery from DEXA_ARDS that was **dropped** (irrelevant for QI):
+Trial-specific machinery is deliberately **omitted** (irrelevant for descriptive QI):
 - T_enroll = T₀ + 24 h enrichment window
 - Pregnancy / influenza / DNR / chronic-steroid / ECMO exclusions
-- Fuzzy-RD enrollment ABG within ±6 h of T_enroll
+- Fuzzy-window enrollment ABG within ±6 h of T_enroll
 
-What was **kept verbatim** (or near-verbatim):
+What the builder **does** (the physiologic ARDS phenotype + its plumbing):
 - Cache architecture (`output/intermediate/_cache/`, raw waterfall before normalization)
 - `_normalize_waterfall` (FiO2 unit detection via p95, clip implausible FiO2 ∈ [0.15, 1.0] and PEEP ∈ [0, 40])
 - `waterfall_cached` flow (filter resp_support to ABG-having hospitalizations, clifpy `process_resp_support_waterfall`, attach encounter_block, cache)
@@ -166,7 +168,7 @@ The waterfall step (~35 min on a fresh cache at UChicago) is checkpointed; re-ru
 - **Site case normalization:** UChicago stores `device_category` lowercase (`"imv"`). All comparisons use lowercase constants. CLIF schema permissible-values are aspirational — see `.claude/lessons.md`.
 - **`hospitalization_id` dtype:** Cast to `str` immediately after any clifpy load before merging — pyarrow-backed extension dtypes silently fail merges. See `.claude/lessons.md`.
 - **Eligibility windowing:** The 12 h sustained-criteria window is checked against ABGs *and* the waterfall (no extubation event allowed in the window). See `code/02_proning_eligibility.py:compute_eligibility`.
-- **`death_dttm` quirks at UChicago:** When `discharge_category == "Expired"` and `death_dttm` is missing or > `discharge_dttm`, fall back to `discharge_dttm`. (Inherited from DEXA_ARDS — relevant once `04_metrics.py` adds death-censoring.)
+- **`death_dttm` quirks at UChicago:** When `discharge_category == "Expired"` and `death_dttm` is missing or > `discharge_dttm`, fall back to `discharge_dttm`. (Relevant once `04_metrics.py` adds death-censoring.)
 - **No raw PHI to stdout:** Only counts and aggregates. Raw data files are blocked by the global `~/.claude/hooks/protect-clif-data.sh` hook.
 
 ---
@@ -174,6 +176,5 @@ The waterfall step (~35 min on a fresh cache at UChicago) is checkpointed; re-ru
 ## References
 
 - Guérin C, et al. Prone positioning in severe acute respiratory distress syndrome. *N Engl J Med* 2013;368:2159-68. (PROSEVA — the eligibility-and-duration definition this project targets.)
-- DEXA_ARDS sibling project: `/Users/shanguleria/Desktop/Research/CLIF/DEXA_ARDS` — source of the ARDS phenotype.
 - CLIF 2.1.0 schema: see `clifpy` package.
 - **Bundle scorecard tile contract:** `../../contract/tile_feed_contract.md` — `04_metrics.py` emits `output/final/tile_feed_proning.json` (schema_version 1, PHI-free, grain `units:[__ALL__ + canonical ICU slugs]`/`periods:["all","month"]`) per this contract. The bundle combiner (`scorecard/build_scorecard.py`) collects it for every metric listed in `config.json → metrics`, with grain-fallback for any (unit, period) the feed doesn't carry. Tile mapping: donut = ever-proned, segments = adherent bounds. (This project now lives at `metrics/proning/` in the `clif-ventilator-qi-dashboard` monorepo.)

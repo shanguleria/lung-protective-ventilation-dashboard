@@ -1,13 +1,13 @@
 """Build the ARDS cohort for the proning QI project.
 
-Cohort definition mirrors the ARDS phenotype used by DEXA_ARDS
-(/Users/shanguleria/Desktop/Research/CLIF/DEXA_ARDS/code/01_build_cohort.py)
-because both projects share the same screening question: "did this ICU stay
-ever look like ARDS?". Trial-specific machinery (T_enroll enrichment,
-ECMO/pregnancy/influenza/DNR exclusions, fuzzy-RD enrollment ABG) is dropped —
-those exist to clean up an effect estimate, and proning QI is descriptive.
+Screening question: "did this ICU stay ever look like ARDS?". The cohort is a
+Berlin moderate-severe ARDS phenotype on invasive ventilation, defined purely
+on physiology so any CLIF site can reproduce it. Trial-specific machinery
+(enrollment-enrichment windows, ECMO/pregnancy/influenza/DNR exclusions,
+fuzzy-window enrollment ABG) is deliberately omitted — that machinery exists to
+clean up a causal effect estimate, and proning QI is descriptive.
 
-ARDS screening at T₀ (per Berlin moderate-severe gate; same as DEXA_ARDS §6):
+ARDS screening at T₀ (Berlin moderate-severe gate):
     - age ≥ 18
     - device_category == "imv"
     - peep_set   ≥ 5  cmH2O
