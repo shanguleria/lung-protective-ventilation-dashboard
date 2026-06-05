@@ -392,8 +392,11 @@ function tileCard(feed){
   if(feed.segments && feed.segments.length){
     segs = '<div class="segs">' + feed.segments.slice(0,3).map(s=>{
       const sc = (s.cells[R.u]||{})[R.pk] || null, sv = rate(sc);
+      // A segment may pin its own color (for descriptive shares where the green/amber/red
+      // quality scale would mislead); otherwise fall back to the rate-threshold scale.
+      const sfill = s.color || segColor(sv);
       return `<div class="seg"><span class="sl">${esc(s.label)}</span>`
-        + `<span class="sb"><span style="width:${(sv||0)*100}%;background:${segColor(sv)}"></span></span>`
+        + `<span class="sb"><span style="width:${(sv||0)*100}%;background:${sfill}"></span></span>`
         + `<span class="sv">${PCT(sv)}</span></div>`;
     }).join('') + '</div>';
   }

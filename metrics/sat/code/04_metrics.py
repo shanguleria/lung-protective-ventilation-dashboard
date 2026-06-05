@@ -222,11 +222,16 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
             "n_unit": "patient-days",
             "cells": cells("n_sat", "n_eligible", with_n=True),
         },
-        # SAT-outcome mini-bars (added 2026-06-05): each is a % of SATs delivered.
+        # SAT-outcome mini-bars (added 2026-06-05): each is a % of SATs delivered. These are
+        # descriptive shares, not a quality scale, so they pin maroon (the combiner's default
+        # green/amber/red segColor — higher=better — would mislead here).
         "segments": [
-            {"key": "resumed", "label": "Resumed sedation", "cells": cells("n_resumed", "n_sat")},
-            {"key": "notresumed", "label": "Not resumed (day)", "cells": cells("n_notresumed", "n_sat")},
-            {"key": "extubated", "label": "Extubated same day", "cells": cells("n_extubated", "n_sat")},
+            {"key": "resumed", "label": "Resumed sedation", "color": "#8a1f2b",
+             "cells": cells("n_resumed", "n_sat")},
+            {"key": "notresumed", "label": "Not resumed (day)", "color": "#8a1f2b",
+             "cells": cells("n_notresumed", "n_sat")},
+            {"key": "extubated", "label": "Extubated same day", "color": "#8a1f2b",
+             "cells": cells("n_extubated", "n_sat")},
         ],
     }
 
