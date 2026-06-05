@@ -193,11 +193,11 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
         "detail_href": "sat_dashboard.html",
         "goal": None,
         "generated": m["generated"],
-        "note": (f"Eligible = ventilated-ICU days on ≥1 SAT-relevant infusion (propofol/benzo/opioid; "
-                 f"dexmedetomidine may continue), non-paralytic ({cov_pct:.0f}% of vent-ICU days). "
-                 "Holds directly observed from charted dose-0 rows + mar_action stop/start. Crude "
-                 "eligibility — CLIF cannot encode all SAT safety-screen exclusions (seizure, "
-                 "withdrawal, ischemia, raised ICP)."),
+        "note": ("• Eligible = vent-ICU days on ≥1 sedative infusion (propofol/benzo/opioid), "
+                 f"non-paralytic ({cov_pct:.0f}% of vent-ICU days); dexmedetomidine may continue"
+                 "• SAT = all SAT-relevant infusions held to rate 0 (charted dose-0 / mar stop-start)"
+                 "• Crude screen — CLIF can't encode all SAT safety exclusions (seizure, withdrawal, "
+                 "ischemia, ↑ICP)"),
         "grain": {"units": units, "periods": ["all", "month", "week"]},
         "headline": {
             "label": "SAT performed",

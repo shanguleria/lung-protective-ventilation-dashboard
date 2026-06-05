@@ -281,6 +281,8 @@ border-radius:999px;padding:1px 7px;font-weight:700;letter-spacing:.3px;vertical
 .seg .sv{flex:0 0 38px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;}
 .spark{width:100%;height:34px;margin-top:10px;}
 .tilenote{font-size:10px;color:var(--muted);line-height:1.35;margin-top:10px;text-align:left;}
+ul.tilenote{margin:10px 0 0;padding-left:14px;}
+ul.tilenote li{margin:2.5px 0;}
 .bignum{font-size:34px;font-weight:800;color:#b9a59c;font-variant-numeric:tabular-nums;margin:24px 0 4px;}
 .phnote{font-size:11px;color:var(--muted);}
 .cardlink{position:absolute;bottom:12px;right:14px;font-size:11.5px;color:var(--maroon);text-decoration:none;font-weight:700;}
@@ -315,10 +317,18 @@ const PCT = v => (v==null||isNaN(v)) ? '—' : (v*100).toFixed(0)+'%';
 const segColor = r => r==null?'#ccc' : r>=0.8?'#2f7d5b' : r>=0.5?'#b5852a':'#a23b3b';
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rate = c => (c && c.den) ? c.num/c.den : null;
+// Note may be a plain string or a '•'-delimited string -> render the latter as bullets.
+function noteHtml(n){
+  if(!n) return '';
+  const parts = String(n).split('•').map(s=>s.trim()).filter(Boolean);
+  return parts.length>1
+    ? '<ul class="tilenote">'+parts.map(t=>`<li>${esc(t)}</li>`).join('')+'</ul>'
+    : `<div class="tilenote">${esc(n)}</div>`;
+}
 
 const feedById = {}; P.feeds.forEach(f => feedById[f.metric_id] = f);
 let unit = P.units.includes('__ALL__') ? '__ALL__' : P.units[0];
-let pType = 'week', pKey = P.weeks[P.weeks.length-1];   // default: latest week
+let pType = 'all', pKey = P.weeks[P.weeks.length-1];   // default: all-time
 
 function curPeriodKey(){ return pType==='all' ? 'all' : pKey; }
 function periodLabel(){ return pType==='all' ? 'all time' : (pType==='month'?P.month_label[pKey]:P.week_label[pKey]); }
@@ -400,7 +410,7 @@ function tileCard(feed){
     spark = sparkSVG(xs, ys, hi);
   }
 
-  const note  = feed.note ? `<div class="tilenote">${esc(feed.note)}</div>` : '';
+  const note  = noteHtml(feed.note);
   const badge = R.badge ? `<span class="badge">${esc(R.badge.trim())}</span>` : '';
   const link  = feed.detail_href ? `<span class="cardlink">View details →</span>` : '';
   const inner = `${P.iconHtml[feed.icon]||''}<div class="cardhead"><div class="mname">${esc(feed.title)}</div>`
@@ -429,8 +439,8 @@ function render(){
 const selU=document.getElementById('sel-unit'), selM=document.getElementById('sel-month'), selW=document.getElementById('sel-week');
 // Month + Week are mutually exclusive. The inactive chip shows a neutral label: Week shows 'All',
 // Month shows 'All time' — except while a Week is active, Month shows '—' (the hidden __wk__ option)
-// so it never reads as a contradictory 'All time'. Default state is the latest week.
-selU.value=unit; selW.value=pKey; selM.value='__wk__';
+// so it never reads as a contradictory 'All time'. Default state is all-time.
+selU.value=unit; selW.value='all'; selM.value='all';
 selU.onchange = e=>{ unit=e.target.value; render(); };
 selM.onchange = e=>{ if(e.target.value!=='all'){ pType='month'; pKey=e.target.value; selW.value='all'; }
                      else { pType='all'; pKey=null; selW.value='all'; } render(); };

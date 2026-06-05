@@ -235,13 +235,11 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame, diag: dict) -> dic
         "detail_href": "sbt_dashboard.html",
         "goal": None,
         "generated": m["generated"],
-        "note": (f"Eligible = ventilated-ICU days with ≥12h controlled ventilation accrued + a ≥2h "
-                 f"stable window (FiO2≤0.50, PEEP≤8, SpO2≥88, norepinephrine-equiv≤0.2 mcg/kg/min), "
-                 f"not tracheostomized and not on a continuous paralytic ({cov_pct:.0f}% of non-trach "
-                 f"vent-ICU days). SBT = a controlled→support transition (pressure support/CPAP, "
-                 f"PEEP≤8 / CPAP≤5) sustained ≥2 min. {native_clause}delivery is a lower bound where "
-                 f"charting is hourly; CPAP pressure read from PEEP (no CLIF CPAP column). Tracheostomized "
-                 f"and continuously-paralyzed patient-days are excluded."),
+        "note": ("• Eligible = ≥12 h controlled + ≥2 h stable window, non-trach, non-paralytic "
+                 f"({cov_pct:.0f}% of non-trach vent-ICU days)"
+                 "• Donut = strict SBT (controlled→support transition ≥2 min); bars = any-length SBT "
+                 "and on a spontaneous mode (of eligible days / of all vent-days)"
+                 "• Transition rates are a lower bound where charting is hourly; CPAP read from PEEP"),
         "grain": {"units": units, "periods": ["all", "month", "week"]},
         "headline": {
             "label": "SBT delivered",
@@ -249,8 +247,15 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame, diag: dict) -> dic
             "n_unit": "patient-days",
             "cells": cells("n_sbt", "n_eligible", with_n=True),
         },
-        # Donut-only tile: the eligibility funnel lives in the dashboard CONSORT.
-        "segments": [],
+        # Mini-bars: the other SBT views vs the strict-delivery donut (react to the selector).
+        "segments": [
+            {"key": "sbt_any", "label": "SBT, any length",
+             "cells": cells("n_sbtany_elig", "n_eligible")},
+            {"key": "spont_elig", "label": "On spont · elig",
+             "cells": cells("n_spont_elig", "n_eligible")},
+            {"key": "spont_all", "label": "On spont · all-days",
+             "cells": cells("n_spont_all", "n_vent_days")},
+        ],
         "provenance": {
             "site_id": cfg.get("site", "unknown"),
             "code_version": _git_sha(),
