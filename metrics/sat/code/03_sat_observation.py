@@ -127,6 +127,7 @@ def main() -> None:
     hold_td = pd.Timedelta(minutes=hold_min)
     obs_rows = []
     kress_rows = []
+    dur_rows = []   # per qualifying SAT hold (PHI-free): the off-sedation duration panel
 
     elig_only = elig[elig["eligible"]]
     for r in elig_only.itertuples(index=False):
@@ -146,6 +147,11 @@ def main() -> None:
         longest_off_min = max(((ge - gs).total_seconds() / 60.0 for gs, ge, _ in holds), default=0.0)
         any_resumed = any(res for _, _, res in holds)
         first_hold_dttm = holds[0][0] if holds else pd.NaT
+
+        # per-hold off-sedation durations (PHI-free: unit/icu_day/off_min/resumed) for the panel
+        for (gs, ge, res) in holds:
+            dur_rows.append({"unit": r.unit, "icu_day": r.icu_day,
+                             "off_min": (ge - gs).total_seconds() / 60.0, "resumed": bool(res)})
 
         obs_rows.append({
             "encounter_block": blk, "icu_day": r.icu_day,
@@ -169,7 +175,46 @@ def main() -> None:
         out[c] = out[c].fillna(False).astype(bool)
     out["n_holds"] = out["n_holds"].fillna(0).astype(int)
     out["longest_off_min"] = out["longest_off_min"].fillna(0.0)
+
+    # --- same-day-extubation outcome: off IMV at the end of the SAT calendar day -------------
+    # "extubated_eod" = the patient is NOT on an invasive-vent device at the next midnight (local)
+    # after the day, AND alive then. Uses the PURE IMV device timeline (build_imv_intervals), so a
+    # patient transferred out of ICU while still intubated is NOT counted, reintubation before
+    # midnight keeps them "on", and death-on-vent is excluded via death_dttm. The trailing-IMV cap
+    # makes end-of-day status near a charting gap a bound (same caveat the rate carries).
+    wf = pd.read_parquet(cohort_mod.cpath("resp_waterfall"))
+    wf = cohort_mod._normalize_waterfall(wf, tz)
+    imv = cohort_mod.build_imv_intervals(wf)
+    imv["encounter_block"] = imv["encounter_block"].astype(str)
+    imv["seg_start"] = si.coerce_dttm(imv["seg_start"], tz)
+    imv["seg_end"] = si.coerce_dttm(imv["seg_end"], tz)
+    ivl = {}
+    for r in imv.itertuples(index=False):
+        ivl.setdefault(str(r.encounter_block), []).append((r.seg_start, r.seg_end))
+    eod = (pd.to_datetime(out["icu_day"].astype(str)) + pd.Timedelta(days=1)) \
+        .dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
+
+    def _off_imv(blk, t):
+        if pd.isna(t):
+            return False
+        for s, e in ivl.get(str(blk), ()):
+            if s <= t < e:
+                return False
+        return True
+    off_imv = [_off_imv(b, t) for b, t in zip(out["encounter_block"], eod)]
+    if "death_dttm" in out.columns:
+        dd = si.coerce_dttm(out["death_dttm"], tz)
+        alive = dd.isna() | (dd > eod)
+    else:
+        alive = pd.Series(True, index=out.index)
+    out["extubated_eod"] = pd.Series(off_imv, index=out.index) & alive.reset_index(drop=True).values
     out.to_parquet(inter / "sat_observation.parquet", index=False)
+
+    _sat = out["eligible"] & out["sat_performed"]
+    _nsat = int(_sat.sum())
+    log.info("same-day extubation among SATs: %d / %d (%.1f%%)  [off IMV & alive at end of SAT day]",
+             int((_sat & out["extubated_eod"]).sum()), _nsat,
+             100 * int((_sat & out["extubated_eod"]).sum()) / max(_nsat, 1))
 
     kress = pd.DataFrame(kress_rows, columns=["encounter_block", "icu_day", "med_category",
                                               "med_dose_unit", "pre_rate", "post_rate", "ratio"]) \
@@ -177,6 +222,12 @@ def main() -> None:
             columns=["encounter_block", "icu_day", "med_category", "med_dose_unit",
                      "pre_rate", "post_rate", "ratio"])
     kress.to_parquet(inter / "kress_resumption.parquet", index=False)
+
+    durs = pd.DataFrame(dur_rows, columns=["unit", "icu_day", "off_min", "resumed"])
+    durs.to_parquet(inter / "sat_durations.parquet", index=False)
+    if not durs.empty:
+        log.info("SAT holds (per-hold off-sedation durations): %d  (median %.0f min, p90 %.0f min)",
+                 len(durs), durs["off_min"].median(), durs["off_min"].quantile(0.9))
 
     n_elig = int(out["eligible"].sum())
     n_sat = int(out.loc[out["eligible"], "sat_performed"].sum())

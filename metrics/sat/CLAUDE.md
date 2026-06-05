@@ -64,6 +64,18 @@ simply stop (a gap)? A gap is ambiguous — SAT-hold-then-resume vs permanent di
 a single number. Mode is set in `config.json → reporting.denominator_mode`
 (`documented` | `impute` | `bounds`). The caveat is carried in the tile feed's `note`.
 
+### SAT outcomes (descriptive add-on, 2026-06-05)
+Among SATs delivered, three outcome rates (each a **% of SATs**, computed in `03`/`04`, shown as the
+dashboard **"What Happens After a SAT?"** panel + **three tile segment bars**):
+- **Resumed sedation** (`sat_resumed`) — a SAT-relevant infusion restarted after the hold.
+- **Not resumed that day** (`n_sat − n_resumed`) — stayed off continuous sedation (complementary to resumed).
+- **Off IMV (extubated) by end of the SAT day** (`extubated_eod`) — the patient is **not on an
+  invasive-vent device at the next local midnight** after the SAT day **and alive** then. Built on the
+  **pure-IMV device timeline** (`build_imv_intervals`), so transfer out of the ICU while still intubated and
+  death-on-vent do **not** count, and reintubation before midnight keeps the patient "on." The trailing-IMV
+  cap makes end-of-day status near a charting gap a bound. UChicago: **5,394 / 25,277 = 21.3%** of SATs.
+  (Resumed/not-resumed are a partition of SATs; same-day extubation overlaps both.)
+
 ### Kress dose-resumption ratio (descriptive add-on)
 For each SAT that **resumes** sedation (a SAT-relevant infusion restarts after the hold), capture the
 per-`med_category` steady-state **pre-hold** and **post-resume** rate and the unitless ratio
@@ -94,13 +106,17 @@ code/
   02_sat_eligibility.py     # eligible SAT-opportunity days (denominator rules)
   03_sat_observation.py     # SAT hold detection + Kress dose-resumption ratio
   04_metrics.py             # rates/bounds + unit/period slices + site summary + tile feed
-  05_dashboard.py           # interactive maroon/cream HTML dashboard
+  05_dashboard.py           # interactive dashboard: donut + over-time + by-ICU-unit + SAT off-sedation
+                            #   DURATION panel + Kress + explicit ELIGIBILITY-criteria catalogue + Table 1.
+                            #   (Static CONSORT cohort-flow image removed 2026-06-05.) The eligibility
+                            #   catalogue is config-driven groundwork toward a future toggle matrix (à la SBT).
 output/
   intermediate/
     _cache/                 # checkpoints (stitched adt/hosp/mapping, resp waterfall, infusions)
     cohort.parquet          # ventilated-ICU patient-days
     sat_eligibility.parquet
     sat_observation.parquet
+    sat_durations.parquet   # per qualifying SAT hold (PHI-free: unit/icu_day/off_min/resumed) — duration panel
     metrics_patient_day_level.parquet   # per-day detail + unit/period keys (keeps ids; not shared)
     metrics_slices.parquet
   final/

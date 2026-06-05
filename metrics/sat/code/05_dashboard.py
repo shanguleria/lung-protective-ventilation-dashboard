@@ -234,43 +234,6 @@ def build_table1(pt: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- figures ---
-def make_consort(counts: dict, graphs_dir: Path) -> str:
-    import matplotlib; matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
-    elig = max(counts["eligible"], 1)
-    stages = [
-        ("Ventilated-ICU Patient-Days", counts["vent"], None),
-        ("Eligible SAT-Opportunity Days", counts["eligible"],
-         f"{counts['vent']-counts['eligible']:,} no SAT-relevant infusion / paralytic"),
-        ("SAT Performed", counts["sat"],
-         f"{counts['eligible']-counts['sat']:,} no qualifying sedation hold"),
-    ]
-    fig, ax = plt.subplots(figsize=(7.6, 5.2))
-    ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis("off"); fig.patch.set_facecolor(CARD)
-    box_w, box_h, cx = 5.2, 1.25, 3.1
-    ys = np.linspace(8.6, 1.1, len(stages))
-    for i, (label, n, excl) in enumerate(stages):
-        y = ys[i]
-        ax.add_patch(FancyBboxPatch((cx - box_w/2, y - box_h/2), box_w, box_h,
-                    boxstyle="round,pad=0.02,rounding_size=0.12", linewidth=1.3,
-                    edgecolor=MAROON_D, facecolor=CREAM))
-        ax.text(cx, y + 0.18, label, ha="center", va="center", fontsize=12,
-                fontweight="bold", color=MAROON_D)
-        pct = f"  ({100*n/elig:.1f}% of eligible)" if label not in (
-            "Ventilated-ICU Patient-Days", "Eligible SAT-Opportunity Days") else ""
-        ax.text(cx, y - 0.26, f"n = {n:,}{pct}", ha="center", va="center", fontsize=11, color=INK)
-        if i < len(stages) - 1:
-            ax.add_patch(FancyArrowPatch((cx, y - box_h/2), (cx, ys[i+1] + box_h/2),
-                        arrowstyle="-|>", mutation_scale=14, linewidth=1.2, color=MUTED))
-        if excl and i > 0:
-            ax.annotate(excl, xy=(cx, (ys[i-1] + y) / 2),
-                        xytext=(cx + box_w/2 + 0.2, (ys[i-1] + y) / 2),
-                        ha="left", va="center", fontsize=8.3, color=MUTED)
-    fig.tight_layout(); graphs_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(graphs_dir / "cohort_consort.png", dpi=150, bbox_inches="tight", facecolor=CARD)
-    fig.savefig(graphs_dir / "cohort_consort.svg", bbox_inches="tight", facecolor=CARD)
-    return _fig_to_uri(fig)
 
 
 def make_kress_svg(kress: pd.DataFrame, half: float) -> str | None:
@@ -336,9 +299,85 @@ def build_slices_js(slices: pd.DataFrame) -> dict:
     out: dict = {}
     for r in slices.itertuples(index=False):
         cell = {"vent": int(r.n_vent_days), "elig": int(r.n_eligible),
-                "sat": int(r.n_sat), "resumed": int(r.n_resumed)}
+                "sat": int(r.n_sat), "resumed": int(r.n_resumed),
+                "notresumed": int(r.n_notresumed), "extubated": int(r.n_extubated)}
         out.setdefault(r.unit, {}).setdefault(r.granularity, {})[r.period] = cell
     return out
+
+
+def build_duration_payload(durs: pd.DataFrame) -> tuple[dict, dict]:
+    """Compact, PHI-free arrays for the SAT off-sedation duration panel (binned live in JS).
+    One record per qualifying hold: off-minutes + unit/month/week INDICES + resumed flag."""
+    d = durs.copy()
+    if not d.empty:
+        d["icu_day"] = d["icu_day"].astype(str)
+        d["mon"] = d["icu_day"].str.slice(0, 7)
+        iso = pd.to_datetime(d["icu_day"], errors="coerce").dt.isocalendar()
+        d["wk"] = (iso["year"].astype("Int64").astype(str) + "-W"
+                   + iso["week"].astype("Int64").astype(str).str.zfill(2))
+        d["unit"] = d["unit"].astype("string").fillna("unknown").replace("", "unknown")
+        d["off_min"] = pd.to_numeric(d["off_min"], errors="coerce").fillna(0.0)
+        d["resumed"] = d["resumed"].astype(bool)
+    units = sorted(d["unit"].dropna().unique().tolist()) if not d.empty else []
+    months = sorted(d["mon"].dropna().unique().tolist()) if not d.empty else []
+    weeks = sorted(d["wk"].dropna().unique().tolist()) if not d.empty else []
+    uidx = {u: i for i, u in enumerate(units)}
+    midx = {m: i for i, m in enumerate(months)}
+    widx = {w: i for i, w in enumerate(weeks)}
+    if d.empty:
+        DUR = {"dur": [], "u": [], "m": [], "w": [], "res": []}
+    else:
+        DUR = {"dur": [int(round(x)) for x in d["off_min"].tolist()],
+               "u": [uidx[u] for u in d["unit"].tolist()],
+               "m": [midx.get(m, -1) for m in d["mon"].tolist()],
+               "w": [widx.get(w, -1) for w in d["wk"].tolist()],
+               "res": [1 if x else 0 for x in d["resumed"].tolist()]}
+    return DUR, {"units": units, "months": months, "weeks": weeks}
+
+
+def build_eligibility_panel(med_sets: dict, hold_min: float, exclude_paralytic: bool) -> str:
+    """Static, config-driven catalogue of the SAT eligibility/numerator criteria — explicit so a
+    future iteration can turn it into a toggle matrix (à la SBT)."""
+    def fmt(s):
+        return ", ".join(sorted(s)) if s else "—"
+    rows = [
+        ("__sub__", "Denominator (eligibility) — who is an SAT opportunity"),
+        ("Continuous SAT-relevant sedation", "einc", "include",
+         f"The day has ≥1 active continuous sedative/analgesic infusion: {fmt(med_sets['sat_relevant'])}."),
+        ("Dexmedetomidine allowed", "enc", "allowed",
+         f"Dexmedetomidine ({fmt(med_sets['dex'])}) may continue — it does not block eligibility and is "
+         "not in the held set."),
+        ("No continuous paralytic", "eexc", "exclude",
+         f"Days on a continuous neuromuscular blocker ({fmt(med_sets['paralytic'])}) are excluded — a "
+         "paralyzed patient is not an SAT candidate."
+         + ("" if exclude_paralytic else " (currently DISABLED in config).")),
+        ("Safety-screen exclusions", "enc", "not codable",
+         "Active seizures, alcohol withdrawal, myocardial ischemia, and raised ICP would exclude a patient "
+         "clinically but are not reliably encodable in CLIF — so this is crude eligibility, not full "
+         "safety-screen-passed eligibility."),
+        ("__sub__", "Numerator — what counts as an SAT performed"),
+        (f"All sedation held to 0 for ≥{hold_min:.0f} min", "einc", "numerator",
+         f"An interval where ALL SAT-relevant infusions are simultaneously at rate 0 for ≥{hold_min:.0f} "
+         "min while the patient stays ventilated and sedation was running earlier that day. "
+         "Dexmedetomidine running is ignored."),
+    ]
+    body = ""
+    for r in rows:
+        if r[0] == "__sub__":
+            body += f'<tr class="esub"><td colspan="3">{html.escape(r[1])}</td></tr>'
+        else:
+            lab, cls, role, defn = r
+            body += (f'<tr><td class="elab">{html.escape(lab)}</td>'
+                     f'<td>{html.escape(defn)}</td>'
+                     f'<td class="erole {cls}">{html.escape(role)}</td></tr>')
+    return ('<div class="section"><h2>Eligibility Criteria</h2>'
+            '<div class="fig-caption">The exact inclusion / exclusion rules behind the denominator and '
+            'numerator, stated explicitly and driven by <code>config.json</code>. The per-day flags they '
+            'rest on (on SAT-relevant sedation · on paralytic · on dexmedetomidine) are already persisted '
+            'per patient-day, so these can become an interactive <b>toggle matrix</b> like the SBT '
+            'dashboard in a future iteration.</div>'
+            '<table class="elig-table"><thead><tr><th>Criterion</th><th>Definition</th><th>Role</th></tr>'
+            '</thead><tbody>' + body + '</tbody></table></div>')
 
 
 FILTER_JS = r"""
@@ -391,7 +430,7 @@ FILTER_JS = r"""
       $("hd-elig").textContent = "—";
       $("hd-sub").textContent = "no eligible days · " + ctx;
       drawDonut(null, false);
-      $("smallnote").style.display = "none"; drawTrend(); drawUnits(); return;
+      $("smallnote").style.display = "none"; drawTrend(); drawUnits(); drawOutcome(); drawDurations(); return;
     }
     const small = c.elig < min;
     const frac = c.elig ? c.sat/c.elig : null;
@@ -399,7 +438,7 @@ FILTER_JS = r"""
     $("hd-sub").textContent = c.sat.toLocaleString() + " received a SAT (" + pct(frac) + ") · " + ctx;
     drawDonut(frac, small);
     $("smallnote").style.display = small ? "block" : "none";
-    drawTrend(); drawUnits();
+    drawTrend(); drawUnits(); drawOutcome(); drawDurations();
   }
 
   // The cell for a GIVEN unit at the current time selection (mirrors cell()).
@@ -476,6 +515,139 @@ FILTER_JS = r"""
       }
     });
     host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" height="'+H+'" width="'+W+'" style="max-width:none">'+svg+'</svg>';
+  }
+
+  // ---- SAT outcome: what happened after the SAT (resumed / not resumed / extubated same day) ----
+  function drawOutcome(){
+    const c = cell();
+    const host = $("outcome"), note = $("outcomeNote");
+    if (!c || !c.sat){
+      host.innerHTML = '<div class="muted">No SATs in this slice.</div>'; note.innerHTML = ''; drawExtubTrend(); return;
+    }
+    const sat = c.sat;
+    const segs = [
+      {n: c.resumed,    col: "#b5852a", lab: "Resumed sedation"},
+      {n: c.notresumed, col: "#7d8a86", lab: "Not resumed that day"},
+      {n: c.extubated,  col: "#8a1f2b", lab: "Off IMV (extubated) by end of day"}
+    ];
+    const W = 580, rowH = 32, padL = 224, barMax = W - padL - 86, top = 2;
+    const H = top + segs.length*rowH + 2;
+    let svg = "";
+    segs.forEach((s, i) => {
+      const y = top + i*rowH, r = sat ? s.n/sat : 0, w = Math.max(1, r*barMax);
+      svg += '<text x="'+(padL-10)+'" y="'+(y+rowH/2+3)+'" font-size="11.5" text-anchor="end" fill="#3a2c2c">'+s.lab+'</text>';
+      svg += '<rect x="'+padL+'" y="'+(y+5)+'" width="'+barMax+'" height="'+(rowH-12)+'" fill="#efe4dc" rx="3"/>';
+      svg += '<rect x="'+padL+'" y="'+(y+5)+'" width="'+w+'" height="'+(rowH-12)+'" fill="'+s.col+'" rx="3">'
+           + '<title>'+s.lab+': '+s.n.toLocaleString()+' / '+sat.toLocaleString()+'</title></rect>';
+      svg += '<text x="'+(padL+barMax+8)+'" y="'+(y+rowH/2+3)+'" font-size="11" fill="#6b5d57">'+pct(r)+'  ('+s.n.toLocaleString()+')</text>';
+    });
+    host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'" style="max-width:100%">'+svg+'</svg>';
+    note.innerHTML = 'Of <b>'+sat.toLocaleString()+'</b> SATs in this slice, <b>'+pct(sat?c.extubated/sat:null)+'</b> ended '
+      + 'with the patient <b>off invasive ventilation (extubated) by the end of the SAT day</b> (alive). The sedation '
+      + 'side: '+pct(sat?c.resumed/sat:null)+' restarted sedation, '+pct(sat?c.notresumed/sat:null)+' did not that day '
+      + '(these two are complementary; same-day extubation overlaps both).';
+    drawExtubTrend();
+  }
+  function drawExtubTrend(){
+    const tg = state.gran === "all" ? "month" : state.gran;
+    const series = (SLICES[state.unit] || {})[tg] || {};
+    const keys = Object.keys(series).sort();
+    const Tg = tg.charAt(0).toUpperCase() + tg.slice(1);
+    $("extubTrendTitle").textContent = "Same-day extubation rate (of SATs) by " + Tg + " · " + CFG.unitLabels[state.unit];
+    const host = $("extubTrend");
+    if (!keys.length){ host.innerHTML = '<div class="muted">No periods in this slice.</div>'; return; }
+    const slot = keys.length > 40 ? 15 : (keys.length > 15 ? 34 : 56);
+    const pad = {l:36, r:12, t:14, b:48}, ih = 150;
+    const W = pad.l + pad.r + keys.length*slot, H = pad.t + ih + pad.b;
+    let maxr = 0.05; for (const k of keys){ const d = series[k]; if (d.sat) maxr = Math.max(maxr, d.extubated/d.sat); }
+    const top = Math.max(0.1, Math.ceil(maxr*100/10)*10/100);
+    const lblStep = Math.ceil(keys.length/24);
+    let svg = '<line x1="'+pad.l+'" y1="'+pad.t+'" x2="'+pad.l+'" y2="'+(pad.t+ih)+'" stroke="#ece1d9"/>' +
+              '<line x1="'+pad.l+'" y1="'+(pad.t+ih)+'" x2="'+(W-pad.r)+'" y2="'+(pad.t+ih)+'" stroke="#ece1d9"/>' +
+              '<text x="'+(pad.l-6)+'" y="'+(pad.t+4)+'" font-size="9" text-anchor="end" fill="#9a8c86">'+(100*top).toFixed(0)+'%</text>' +
+              '<text x="'+(pad.l-6)+'" y="'+(pad.t+ih)+'" font-size="9" text-anchor="end" fill="#9a8c86">0</text>';
+    keys.forEach((k, i) => {
+      const d = series[k], r = d.sat ? d.extubated/d.sat : 0;
+      const x = pad.l + i*slot + slot*0.16, w = slot*0.68;
+      const yT = pad.t + ih*(1 - r/top), hT = ih*(r/top);
+      const dim = d.sat < min, sel = (k === state.period);
+      const cBar = dim ? "#e2d3cc" : "#8a1f2b";
+      svg += '<g><title>' + k + "\n" + d.extubated + "/" + d.sat + " extubated (" + (100*r).toFixed(0) + "%)" +
+             (dim ? "  — n small" : "") + '</title>';
+      svg += '<rect x="'+x+'" y="'+yT+'" width="'+w+'" height="'+hT+'" fill="'+cBar+'"' + (sel ? ' stroke="#3a2c2c" stroke-width="1.5"' : '') + '/></g>';
+      if (i % lblStep === 0){
+        const lab = tg === "month" ? k.slice(2) : k.replace(/^\d{4}-/, "");
+        const cx = x + w/2;
+        svg += '<text x="'+cx+'" y="'+(H-pad.b+12)+'" font-size="8.5" text-anchor="end" fill="#9a8c86" transform="rotate(-35 '+cx+' '+(H-pad.b+12)+')">'+lab+'</text>';
+      }
+    });
+    host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" height="'+H+'" width="'+W+'" style="max-width:none">'+svg+'</svg>';
+  }
+
+  // ---- SAT off-sedation hold-duration histogram + percentile table ----
+  const DBUCK = [0, 60, 120, 240, 480, 720, Infinity];
+  const DBLAB = ["<1h", "1–2h", "2–4h", "4–8h", "8–12h", ">12h"];
+  function durValues(){
+    const selU = state.unit === "__ALL__" ? -1 : DURCFG.units.indexOf(state.unit);
+    let mode = 0, sel = -1;
+    if (!(state.gran === "all" || state.period === "__all__")){
+      if (state.gran === "month"){ mode = 1; sel = DURCFG.months.indexOf(state.period); }
+      else if (state.gran === "week"){ mode = 2; sel = DURCFG.weeks.indexOf(state.period); }
+    }
+    const D = DUR.dur, U = DUR.u, M = DUR.m, W = DUR.w, R = DUR.res, out = []; let nres = 0;
+    for (let i = 0; i < D.length; i++){
+      if (selU >= 0 && U[i] !== selU) continue;
+      if (mode === 1 && M[i] !== sel) continue;
+      if (mode === 2 && W[i] !== sel) continue;
+      out.push(D[i]); if (R[i]) nres++;
+    }
+    return {vals: out, nres: nres};
+  }
+  function fmtDur(m){ return m == null ? "—" : (m < 60 ? m.toFixed(0) + " min" : (m/60).toFixed(1) + " h"); }
+  function qtile(sorted, q){
+    if (!sorted.length) return null;
+    return sorted[Math.min(sorted.length - 1, Math.round(q * (sorted.length - 1)))];
+  }
+  function drawDurations(){
+    const dv = durValues(), vals = dv.vals;
+    const when = (state.gran === "all" || state.period === "__all__") ? "all time" : plabel(state.period);
+    $("durTitle").textContent = "SAT off-sedation hold duration · " + CFG.unitLabels[state.unit] + " · " + when;
+    const host = $("durHist"), tbl = $("durTable"), note = $("durNote");
+    if (!vals.length){
+      host.innerHTML = '<div class="muted">No SAT holds in this slice.</div>'; tbl.innerHTML = ""; note.innerHTML = ""; return;
+    }
+    const n = vals.length;
+    const counts = new Array(DBLAB.length).fill(0);
+    for (const v of vals){
+      let b = DBUCK.length - 2;
+      for (let j = 0; j < DBUCK.length - 1; j++){ if (v < DBUCK[j+1]){ b = j; break; } }
+      counts[b]++;
+    }
+    const maxc = Math.max.apply(null, counts) || 1;
+    const padL = 34, padB = 30, padT = 16, padR = 10, bw = 78, ih = 168;
+    const W = padL + padR + DBLAB.length * bw, H = padT + ih + padB;
+    let svg = '<line x1="'+padL+'" y1="'+padT+'" x2="'+padL+'" y2="'+(padT+ih)+'" stroke="#ece1d9"/>'
+            + '<line x1="'+padL+'" y1="'+(padT+ih)+'" x2="'+(W-padR)+'" y2="'+(padT+ih)+'" stroke="#ece1d9"/>';
+    counts.forEach((c, i) => {
+      const x = padL + i*bw + bw*0.16, w = bw*0.68;
+      const h = ih*(c/maxc), y = padT + ih - h, pc = 100*c/n;
+      const over = (i === DBLAB.length - 1);
+      svg += '<g><title>'+DBLAB[i]+': '+c.toLocaleString()+' ('+pc.toFixed(1)+'%)</title>';
+      svg += '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="'+(over?"#7d8a86":"#8a1f2b")+'" rx="2"/></g>';
+      if (c > 0) svg += '<text x="'+(x+w/2)+'" y="'+(y-3)+'" font-size="9.5" text-anchor="middle" fill="#6b5d57">'+pc.toFixed(0)+'%</text>';
+      svg += '<text x="'+(x+w/2)+'" y="'+(padT+ih+13)+'" font-size="9.5" text-anchor="middle" fill="#6b5d57">'+DBLAB[i]+'</text>';
+    });
+    svg += '<text x="'+(padL-5)+'" y="'+(padT+5)+'" font-size="9" text-anchor="end" fill="#9a8c86">'+maxc.toLocaleString()+'</text>'
+         + '<text x="'+(padL-5)+'" y="'+(padT+ih)+'" font-size="9" text-anchor="end" fill="#9a8c86">0</text>';
+    host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'" style="max-width:100%">'+svg+'</svg>';
+    const s = vals.slice().sort((a,b) => a - b);
+    const qs = [["p10",0.10],["p25",0.25],["Median",0.50],["p75",0.75],["p90",0.90]];
+    let head = '<tr><th>holds (n)</th>', body = '<tr><td>'+n.toLocaleString()+'</td>';
+    for (const [lab,q] of qs){ head += '<th>'+lab+'</th>'; body += '<td>'+fmtDur(qtile(s,q))+'</td>'; }
+    tbl.innerHTML = '<table class="dur-table">'+head+'</tr>'+body+'</tr></table>';
+    note.innerHTML = '<b>'+dv.nres.toLocaleString()+' ('+pct(n?dv.nres/n:null)+')</b> of these holds were followed by '
+      + 'sedation being restarted; the remaining '+(n-dv.nres).toLocaleString()+' left the patient off continuous '
+      + 'sedation (a successful interruption needing no further sedation — often pre-extubation).';
   }
 
   unitSel.onchange = () => { state.unit = unitSel.value; fillPeriods(); render(); };
@@ -596,6 +768,24 @@ text-transform:none;letter-spacing:0;}}
 .smallnote{{display:none;font-size:11.5px;color:var(--warn);margin:-22px 0 26px;}}
 .trend-wrap{{overflow-x:auto;padding-bottom:4px;}}
 .muted{{color:var(--muted);font-size:13px;}}
+.dur-wrap{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:24px;}}
+.dur-table{{border-collapse:collapse;margin:8px 0 2px;font-size:13px;}}
+.dur-table th{{background:var(--cream);color:var(--maroon-d);font-weight:700;padding:7px 15px;
+border-bottom:2px solid var(--maroon-d);text-align:center;}}
+.dur-table td{{padding:7px 15px;border-bottom:1px solid var(--line);text-align:center;
+font-variant-numeric:tabular-nums;}}
+.durNote{{font-size:13.5px;color:var(--ink);margin-top:12px;line-height:1.65;
+background:var(--cream);border:1px solid var(--line);border-radius:10px;padding:12px 16px;}}
+.durNote b{{color:var(--maroon-d);}}
+.elig-table{{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px;}}
+.elig-table th{{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+color:var(--muted);border-bottom:1px solid var(--line);padding:6px 10px;}}
+.elig-table td{{padding:7px 10px;border-bottom:1px solid #f0e7e1;vertical-align:top;}}
+.elig-table .esub td{{background:var(--cream);font-weight:800;color:var(--maroon-d);
+font-size:11px;text-transform:uppercase;letter-spacing:.04em;}}
+.elig-table .elab{{font-weight:700;color:var(--ink);white-space:nowrap;}}
+.erole{{font-weight:700;white-space:nowrap;font-size:11.5px;}}
+.erole.einc{{color:#2f6f7d;}} .erole.eexc{{color:#8a1f2b;}} .erole.enc{{color:#9a8c86;}}
 .fig{{text-align:center;margin:6px 0;}}
 .fig img{{max-width:100%;height:auto;border-radius:8px;}}
 .fig-caption{{font-size:13px;color:var(--muted);margin-top:8px;text-align:left;}}
@@ -646,14 +836,33 @@ border-top:1px solid var(--line);padding-top:14px;}}
     parentheses; bars are grayed below the small-cell threshold.</div>
   </div>
 
-  <div class="section"><h2>Cohort Flow</h2>
-    <div class="fig"><img src="{ctx['consort_uri']}" alt="cohort funnel"></div>
-    <div class="fig-caption">From ventilated-ICU patient-days to eligible SAT-opportunity days, days
-    with a SAT performed, and the subset that resumed sedation. Percentages are of the eligible
-    denominator.</div>
+  <div class="section"><h2>What Happens After a SAT?</h2>
+    <div class="fig-caption">Of the SATs delivered in the selected slice: the share that <b>resumed sedation</b>,
+    the share <b>not resumed</b> that day, and the share that ended with the patient <b>off invasive
+    ventilation (extubated) by the end of the SAT day</b>. Reacts to Unit / Time / Period.</div>
+    <div id="outcome"></div>
+    <div class="durNote" id="outcomeNote"></div>
+    <div class="fig-caption" id="extubTrendTitle" style="margin-top:20px"></div>
+    <div class="trend-wrap" id="extubTrend"></div>
+    <div class="fig-caption"><b>Extubated by end of day</b> = not on an invasive-vent device at the next
+    midnight after the SAT day, alive — built on the pure-IMV device timeline, so transfer out of the ICU
+    while still intubated and death on the vent do <b>not</b> count, and reintubation before midnight keeps
+    the patient “on.” Where charting simply stops, end-of-day status is a bound.</div>
+  </div>
+
+  <div class="section"><h2>How Long Are the SATs?</h2>
+    <div class="fig-caption" id="durTitle"></div>
+    <div class="dur-wrap"><div class="trend-wrap" id="durHist"></div><div id="durTable"></div></div>
+    <div class="durNote" id="durNote"></div>
+    <div class="fig-caption">Distribution of the <b>off-sedation hold duration</b> for every qualifying
+    SAT (all SAT-relevant infusions at rate 0) in the selected slice. Reacts to Unit / Time / Period.
+    Long holds (&gt;12 h) are sustained sedation-free time, often pre-extubation; a brief hold charted
+    only hourly can be missed, so short durations are a lower bound.</div>
   </div>
 
   {kress_block}
+
+  {ctx['eligibility']}
 
   <div class="section"><h2>Table 1 — Eligible Patients, Ever-SAT vs Never (n = {ctx['table_n']:,})
     <span style="font-size:12px;font-weight:600;color:var(--muted)">· site-wide · all time</span></h2>
@@ -688,6 +897,9 @@ def main() -> None:
     obs = pd.read_parquet(inter / "metrics_patient_day_level.parquet")
     slices = pd.read_parquet(inter / "metrics_slices.parquet")
     kress = pd.read_parquet(inter / "kress_resumption.parquet")
+    durs = (pd.read_parquet(inter / "sat_durations.parquet")
+            if (inter / "sat_durations.parquet").exists()
+            else pd.DataFrame(columns=["unit", "icu_day", "off_min", "resumed"]))
 
     def s(metric):
         return summary.loc[summary["metric"] == metric].iloc[0]
@@ -711,8 +923,11 @@ def main() -> None:
               "unitLabels": {u: UNIT_LABELS.get(u, u) for u in slices["unit"].unique()},
               "unitOrder": unit_order,
               "periodLabels": period_labels}
+    dur_payload, dur_cfg = build_duration_payload(durs)
     script_html = ("<script>\nconst SLICES = " + _json.dumps(slices_js, ensure_ascii=False)
                    + ";\nconst CFG = " + _json.dumps(cfg_js, ensure_ascii=False)
+                   + ";\nconst DUR = " + _json.dumps(dur_payload, ensure_ascii=False)
+                   + ";\nconst DURCFG = " + _json.dumps(dur_cfg, ensure_ascii=False)
                    + ";\n" + FILTER_JS + "\n</script>")
 
     import math
@@ -757,8 +972,9 @@ def main() -> None:
     )
 
     logo_uri = _load_logo(PROJECT_ROOT / "references" / "images" / "clif_logo_v2.png")
-    consort_uri = make_consort({"vent": n_vent, "eligible": n_elig, "sat": n_sat, "resumed": n_resumed},
-                               final / "graphs")
+    med_sets = cohort_mod.sat_med_sets(cfg)
+    exclude_paralytic = bool(cfg.get("sat_eligibility", {}).get("exclude_paralytic_days", True))
+    eligibility_html = build_eligibility_panel(med_sets, hold_min, exclude_paralytic)
     kress_svg = make_kress_svg(kress, half)
     kress_n = int(kress["ratio"].replace([np.inf, -np.inf], np.nan).dropna().shape[0]) if not kress.empty else 0
     kress_table = build_kress_table(kress_sum) if kress_n else ""
@@ -770,7 +986,7 @@ def main() -> None:
     ctx = {
         "logo_uri": logo_uri, "site": site, "generated": generated,
         "controls": build_controls(slices), "cards": cards, "smallnote": smallnote,
-        "caveat": caveat, "trend": '<div id="trend"></div>', "consort_uri": consort_uri,
+        "caveat": caveat, "trend": '<div id="trend"></div>', "eligibility": eligibility_html,
         "kress_svg": kress_svg, "kress_table": kress_table, "kress_n": kress_n,
         "table1": table1_html, "table_n": len(pt), "script": script_html,
     }

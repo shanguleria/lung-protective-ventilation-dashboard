@@ -82,11 +82,17 @@ def attach_periods(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 def _slice_metrics(g: pd.DataFrame) -> dict:
     elig = g["eligible"]
+    sat = elig & g["sat_performed"]
+    n_sat = int(sat.sum())
+    n_resumed = int((sat & g["sat_resumed"]).sum())
     return {
         "n_vent_days": int(len(g)),
         "n_eligible": int(elig.sum()),
-        "n_sat": int((elig & g["sat_performed"]).sum()),
-        "n_resumed": int((elig & g["sat_resumed"]).sum()),
+        "n_sat": n_sat,
+        "n_resumed": n_resumed,
+        # SAT-outcome breakdown (of SATs): resumed / not-resumed-same-day / extubated-by-EOD
+        "n_notresumed": n_sat - n_resumed,
+        "n_extubated": int((sat & g["extubated_eod"]).sum()) if "extubated_eod" in g.columns else 0,
     }
 
 
@@ -104,11 +110,13 @@ def build_slice_cells(pl: pd.DataFrame) -> pd.DataFrame:
             for period, g in gu.groupby(col, observed=True):
                 emit(unit, gran, str(period), g)
 
-    cols = ["unit", "granularity", "period", "n_vent_days", "n_eligible", "n_sat", "n_resumed"]
+    cols = ["unit", "granularity", "period", "n_vent_days", "n_eligible", "n_sat", "n_resumed",
+            "n_notresumed", "n_extubated"]
     df = pd.DataFrame(rows)[cols]
     df["rate_sat"] = df["n_sat"] / df["n_eligible"].replace(0, np.nan)
     df["rate_sat_of_vent"] = df["n_sat"] / df["n_vent_days"].replace(0, np.nan)
     df["rate_resumed"] = df["n_resumed"] / df["n_eligible"].replace(0, np.nan)
+    df["rate_extubated_of_sat"] = df["n_extubated"] / df["n_sat"].replace(0, np.nan)
     return df.sort_values(["unit", "granularity", "period"]).reset_index(drop=True)
 
 
@@ -127,6 +135,13 @@ def build_summary_rows(site: str, cfg: dict, m: dict) -> pd.DataFrame:
          _rate(m["n_sat"], m["n_vent_days"]), "denominator-broadening"),
         ("sat_resumed", "Resumed-only SAT / eligible (sensitivity)", m["n_resumed"], m["n_eligible"],
          _rate(m["n_resumed"], m["n_eligible"]), "excludes end-of-day discontinuations"),
+        # SAT outcomes (of SATs delivered)
+        ("sat_outcome_resumed", "SAT → resumed sedation / SAT", m["n_resumed"], m["n_sat"],
+         _rate(m["n_resumed"], m["n_sat"]), "sedation restarted after the hold"),
+        ("sat_outcome_notresumed", "SAT → not resumed that day / SAT", m["n_sat"] - m["n_resumed"], m["n_sat"],
+         _rate(m["n_sat"] - m["n_resumed"], m["n_sat"]), "stayed off continuous sedation"),
+        ("sat_outcome_extubated", "SAT → off IMV (extubated) by end of day / SAT", m["n_extubated"], m["n_sat"],
+         _rate(m["n_extubated"], m["n_sat"]), "off invasive vent & alive at next midnight; pure-IMV timeline"),
         ("patients_eligible", "Patients with >=1 eligible day", m["n_pts_elig"], m["n_pts_elig"], 1.0, ""),
         ("patients_ever_sat", "Patients ever SAT / eligible patients", m["n_pts_sat"], m["n_pts_elig"],
          _rate(m["n_pts_sat"], m["n_pts_elig"]), "patient-level secondary framing"),
@@ -196,6 +211,8 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
         "note": ("• Eligible = vent-ICU days on ≥1 sedative infusion (propofol/benzo/opioid), "
                  f"non-paralytic ({cov_pct:.0f}% of vent-ICU days); dexmedetomidine may continue"
                  "• SAT = all SAT-relevant infusions held to rate 0 (charted dose-0 / mar stop-start)"
+                 "• Bars (of SATs): resumed sedation · not resumed that day · off IMV (extubated) by end "
+                 "of the SAT day — alive, pure-IMV timeline so ICU-transfer-while-intubated does not count"
                  "• Crude screen — CLIF can't encode all SAT safety exclusions (seizure, withdrawal, "
                  "ischemia, ↑ICP)"),
         "grain": {"units": units, "periods": ["all", "month", "week"]},
@@ -205,9 +222,12 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
             "n_unit": "patient-days",
             "cells": cells("n_sat", "n_eligible", with_n=True),
         },
-        # Donut-only tile (decided 2026-06-03): the headline SAT-performed rate
-        # is the whole story; the eligibility funnel lives in the dashboard CONSORT.
-        "segments": [],
+        # SAT-outcome mini-bars (added 2026-06-05): each is a % of SATs delivered.
+        "segments": [
+            {"key": "resumed", "label": "Resumed sedation", "cells": cells("n_resumed", "n_sat")},
+            {"key": "notresumed", "label": "Not resumed (day)", "cells": cells("n_notresumed", "n_sat")},
+            {"key": "extubated", "label": "Extubated same day", "cells": cells("n_extubated", "n_sat")},
+        ],
     }
 
 
@@ -257,6 +277,8 @@ def main() -> None:
     n_eligible = int(obs["eligible"].sum())
     n_sat = int((obs["eligible"] & obs["sat_performed"]).sum())
     n_resumed = int((obs["eligible"] & obs["sat_resumed"]).sum())
+    n_extubated = int((obs["eligible"] & obs["sat_performed"] & obs["extubated_eod"]).sum()) \
+        if "extubated_eod" in obs.columns else 0
     has_pid = "patient_id" in obs.columns
     elig_df = obs[obs["eligible"]]
     n_pts_elig = int(elig_df["patient_id"].nunique()) if has_pid else 0
@@ -264,8 +286,8 @@ def main() -> None:
 
     generated = _dt.datetime.now().isoformat(timespec="minutes")
     m = {"n_vent_days": n_vent_days, "n_eligible": n_eligible, "n_sat": n_sat,
-         "n_resumed": n_resumed, "n_pts_elig": n_pts_elig, "n_pts_sat": n_pts_sat,
-         "hold_min": hold_min, "generated": generated}
+         "n_resumed": n_resumed, "n_extubated": n_extubated, "n_pts_elig": n_pts_elig,
+         "n_pts_sat": n_pts_sat, "hold_min": hold_min, "generated": generated}
 
     slices = build_slice_cells(obs)
     _assert_slice_integrity(slices, m)
