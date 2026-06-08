@@ -73,8 +73,8 @@ sev = pd.read_parquet(OUT_DIR / "02d_severity.parquet")[["hospitalization_id", "
 sev["hospitalization_id"] = sev["hospitalization_id"].astype(str)
 sev["calendar_day"] = pd.to_datetime(sev["calendar_day"]).dt.date
 
-day = status[["hospitalization_id", "calendar_day", "assigned_unit", "total_imv_minutes",
-              "plat_status", "dp_status"]].merge(vt, on=key, how="left").merge(sev, on=key, how="left")
+day = status[["hospitalization_id", "calendar_day", "assigned_unit", "assigned_unit_name",
+              "total_imv_minutes", "plat_status", "dp_status"]].merge(vt, on=key, how="left").merge(sev, on=key, how="left")
 day[["vt_assess_min", "vt8_in_min"]] = day[["vt_assess_min", "vt8_in_min"]].fillna(0.0)
 day["severity"] = day["severity"].fillna("unknown")
 
@@ -96,7 +96,24 @@ day["month"] = _dt.dt.strftime("%Y-%m")
 print("[lpv-feed] Building the LPV tile feed (per unit x all/month/week) ...")
 weeks = sorted(day["week"].unique().tolist())
 months = sorted(day["month"].unique().tolist())
-units = ["__ALL__"] + [u for u in UNIT_ORDER_REST if u in set(day["assigned_unit"])]
+type_units = [u for u in UNIT_ORDER_REST if u in set(day["assigned_unit"])]
+units = ["__ALL__"] + type_units    # type-dim list (back-compat: grain/ui keep the location_type units)
+
+# Specific-unit (location_name) dimension. Each name rolls up to one location_type;
+# order names by their parent type's canonical order, then alphabetically.
+name_parent = (day.dropna(subset=["assigned_unit_name"]).drop_duplicates("assigned_unit_name")
+               .set_index("assigned_unit_name")["assigned_unit"].to_dict())
+def _name_sort_key(n):
+    p = name_parent.get(n)
+    return (UNIT_ORDER_REST.index(p) if p in UNIT_ORDER_REST else 99, n)
+name_units = sorted([n for n in day["assigned_unit_name"].dropna().unique()], key=_name_sort_key)
+
+# Optional friendly labels (config "unit_labels": {"N09S": "MICU North"}); fall back to raw code.
+LABELS = CFG.get("unit_labels", {}) or {}
+dim_labels = {n: LABELS.get(n, n) for n in name_units}
+dim_labels.update({u: LABELS[u] for u in type_units if u in LABELS})
+
+all_keys = ["__ALL__"] + type_units + name_units   # every cell key the feed publishes
 rep = day.groupby("week")["calendar_day"].min()
 week_label = {w: f"Week {w[-2:].lstrip('0')} · {pd.Timestamp(rep[w]).strftime('%b %Y')}" for w in weeks}
 month_label = {m: pd.Timestamp(m + "-01").strftime("%b %Y") for m in months}
@@ -115,17 +132,19 @@ def cell_counts(df: pd.DataFrame) -> dict:
     }
 
 
-raw = {u: {} for u in units}
+raw = {u: {} for u in all_keys}
 raw["__ALL__"]["all"] = cell_counts(day)
-for u, gu in day.groupby("assigned_unit"):
-    if u in raw:
-        raw[u]["all"] = cell_counts(gu)
+for col in ("assigned_unit", "assigned_unit_name"):
+    for u, gu in day.dropna(subset=[col]).groupby(col):
+        if u in raw:
+            raw[u]["all"] = cell_counts(gu)
 for bucket in ("week", "month"):
     for b, gb in day.groupby(bucket):
         raw["__ALL__"][b] = cell_counts(gb)
-        for u, gu in gb.groupby("assigned_unit"):
-            if u in raw:
-                raw[u][b] = cell_counts(gu)
+        for col in ("assigned_unit", "assigned_unit_name"):
+            for u, gu in gb.dropna(subset=[col]).groupby(col):
+                if u in raw:
+                    raw[u][b] = cell_counts(gu)
 
 
 def headline_cells() -> dict:
@@ -154,6 +173,12 @@ lpv_feed = {
     "goal": LPV_GOAL,
     "note": None,
     "grain": {"units": units, "periods": ["all", "month", "week"]},
+    # Two ICU-grouping dimensions. `type` = location_type (the back-compat default, also in
+    # grain/ui.units); `name` = specific unit (location_name). Both sets of keys live in
+    # headline/segment cells; `parent` nests each name under its type, `labels` are optional
+    # friendly names. The combiner's "Group ICUs by" toggle reads this block.
+    "dims": {"type": type_units, "name": name_units,
+             "parent": {n: name_parent[n] for n in name_units}, "labels": dim_labels},
     "headline": {"label": "adherent", "den_label": "of assessable", "n_unit": "patient-days",
                  "cells": headline_cells()},
     "segments": [
@@ -179,4 +204,5 @@ out_path.write_text(json.dumps(lpv_feed, indent=2, allow_nan=False))
 print(f"  wrote {out_path}")
 hc = lpv_feed["headline"]["cells"]["__ALL__"]["all"]
 print(f"  LPV headline Vt<={cut}: {hc['num']}/{hc['den']} = {hc['num'] / hc['den'] * 100:.1f}% (all units / all time)")
+print(f"  dims: {len(type_units)} location_type(s), {len(name_units)} specific unit(s): {name_units}")
 print("Done.")

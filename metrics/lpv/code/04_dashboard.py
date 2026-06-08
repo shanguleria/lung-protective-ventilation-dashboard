@@ -155,6 +155,26 @@ DP_MAX = float(agg["params"]["dp_max"])
 months = sorted(monthly["month"].unique().tolist())
 units = ["__ALL__"] + [u for u in UNIT_ORDER_REST if u in set(monthly["assigned_unit"])]
 
+# Specific-unit (location_name) dimension — for the "Group ICUs by" toggle in the by-unit tab.
+# 03's parquets carry both dims (tagged via `dim`); name keys live alongside type keys, so the
+# per-unit payload structures below are built over `payload_units` = type units + name units and
+# the JS toggle just swaps which list the by-unit lines/bars iterate.
+name_parent = agg.get("unit_name_to_type", {})
+def _name_sort_key(n):
+    p = name_parent.get(n)
+    return (UNIT_ORDER_REST.index(p) if p in UNIT_ORDER_REST else 99, n)
+name_units = sorted(name_parent.keys(), key=_name_sort_key)
+payload_units = units + name_units    # every unit key the per-unit payload structures cover
+
+# Labels (optional config override) + a stable color for each specific unit.
+LABELS = CFG.get("unit_labels", {}) or {}
+UNIT_LABEL_FULL = dict(UNIT_LABEL)
+UNIT_LABEL_FULL.update({n: LABELS.get(n, n) for n in name_units})
+UNIT_LABEL_FULL.update({u: LABELS[u] for u in units if u in LABELS})
+_NAME_PALETTE = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#882255", "#44AA99",
+                 "#D55E00", "#117733", "#332288", "#AA4499", "#88CCEE", "#999933"]
+unit_colors = {n: _NAME_PALETTE[i % len(_NAME_PALETTE)] for i, n in enumerate(name_units)}
+
 
 def pct_assessable_col(df):
     # for monthly summary (has non_adherent split)
@@ -187,7 +207,7 @@ def counts_array(sub: pd.DataFrame, col: str) -> list:
 #   ass[unit][measure][sev]         — assessable (cutoff-independent)
 #   ad[unit][measure][cutoff][sev]  — adherent (cutoff-dependent)
 tot, ass, ad = {}, {}, {}
-for u in units:
+for u in payload_units:
     g_u = grid[grid["assigned_unit"] == u]
     tot[u], ass[u], ad[u] = {}, {}, {}
     for s in SEVS:
@@ -207,7 +227,7 @@ for u in units:
 stc = {}
 for m in ["plat", "dp"]:
     stc[m] = {}
-    for u in units:
+    for u in payload_units:
         g_um = monthly[(monthly["assigned_unit"] == u) & (monthly["measure"] == m)].copy()
         g_um["ass"] = g_um["n_adherent"] + g_um["n_non_adherent"]
         stc[m][u] = {}
@@ -246,7 +266,7 @@ def warr(sub: pd.DataFrame, col: str) -> list:
 
 
 wtot, wass, wad = {}, {}, {}
-for u in units:
+for u in payload_units:
     gu = wgrid[wgrid["assigned_unit"] == u]
     wtot[u] = warr(gu[(gu["measure"] == "vt") & (gu["vt_cutoff"] == VT_DEFAULT)], "n_total")
     wass[u], wad[u] = {}, {}
@@ -257,7 +277,7 @@ for u in units:
 wstc = {}
 for m in ["plat", "dp"]:
     wstc[m] = {}
-    for u in units:
+    for u in payload_units:
         s = wsum[(wsum["assigned_unit"] == u) & (wsum["measure"] == m)].copy()
         s["ass"] = s["n_adherent"] + s["n_non_adherent"]
         wstc[m][u] = {"ad": warr(s, "n_adherent"), "ass": warr(s, "ass"), "tot": warr(s, "n_total")}
@@ -406,10 +426,12 @@ payload = jsonable({
                "dp_max": DP_MAX, "adherence_fraction": agg["params"]["adherence_fraction"],
                "min_assessable_min": agg["params"]["min_assessable_min"]},
     "months": months, "years": years, "units": units, "days": days, "severity_strata": SEVS,
+    "name_units": name_units, "unit_colors": unit_colors,
+    "unit_dims": {"parent": {n: name_parent[n] for n in name_units}},
     "day_week": day_week, "week_label": week_label, "weeks": weeks_list,
     "wtot": wtot, "wass": wass, "wad": wad, "wstc": wstc, "whist": whist,
     "wtable1": wtable1, "wheadline": wheadline,
-    "unit_label": UNIT_LABEL, "measure_label": MEASURE_LABEL,
+    "unit_label": UNIT_LABEL_FULL, "measure_label": MEASURE_LABEL,
     "cohort_headline": cohort_headline, "period_headline": period_headline,
     "tot": tot, "ass": ass, "ad": ad, "stc": stc, "vtd": vtd, "std": std,
     "histc": histc, "table1": table1,
@@ -549,9 +571,15 @@ const baseLayout = extra => Object.assign({font:FONT, margin:{l:54,r:18,t:28,b:4
   yaxis:{tickformat:".0%", rangemode:"tozero", gridcolor:"#ece1d9"},
   xaxis:{gridcolor:"#f6efe9"}, legend:{font:{size:11}}}, extra||{});
 const CFG = {displayModeBar:false, responsive:true};
-let state = {cutoff:P.params.vt_default, trendMeasure:"vt", year:"all", month:"all", week:"all", severity:"all"};
+let state = {cutoff:P.params.vt_default, trendMeasure:"vt", year:"all", month:"all", week:"all", severity:"all", unitDim:"type"};
 let active = "p-vt";
 function sevList(){ return state.severity==="all" ? P.severity_strata : [state.severity]; }
+// "Group ICUs by" dimension for the by-unit tab: location_type (default) vs specific unit (location_name).
+// Both grains are pre-aggregated into the same per-unit payload structures; this just picks the key list.
+const NAME_UNITS = P.name_units || [];
+function curUnits(){ return state.unitDim==="name" ? NAME_UNITS : P.units.filter(u=>u!=="__ALL__"); }
+function uColor(u){ return COLORS[u] || (P.unit_colors&&P.unit_colors[u]) || "#888"; }
+function dimNoun(){ return state.unitDim==="name" ? "specific unit" : "ICU type"; }
 // ISO-week → day-index map (lean weekly = site-wide, from the daily data).
 const WEEKDAYS = {}; (P.day_week||[]).forEach((wk,i)=>{ (WEEKDAYS[wk]=WEEKDAYS[wk]||[]).push(i); });
 function isWeek(){ return state.year!=="all" && state.week!=="all"; }
@@ -614,9 +642,9 @@ function trendSeries(measure, unit){
   return y;
 }
 function unitTraces(measure){
-  return P.units.map(u=>({
+  return ["__ALL__"].concat(curUnits()).map(u=>({
     x:P.months, y:trendSeries(measure,u), name:P.unit_label[u]||u, mode:"lines",
-    line:{color:COLORS[u]||"#888", width:(u==="__ALL__")?3:1.3},
+    line:{color:uColor(u), width:(u==="__ALL__")?3:1.3},
     opacity:(u==="__ALL__")?1:0.85, connectgaps:false
   }));
 }
@@ -717,15 +745,15 @@ function drawTrends(){
   const xr = (state.year==="all") ? null : [state.year+"-01-01", monthAfter(state.year+"-12")];
   Plotly.react('tr-trend', unitTraces(m), baseLayout({xaxis:{range:xr, gridcolor:"#f6efe9"}}), CFG);
   // Bar = the exact selected period (month / week / year / all).
-  const us=P.units.filter(u=>u!=="__ALL__");
+  const us=curUnits();
   const rate=u=> (isWeek()?mRateW(m,u):mRate(m,u,idxs)).ar;
   Plotly.react('tr-bar', [{x:us.map(u=>P.unit_label[u]||u), y:us.map(rate), type:"bar",
-    marker:{color:us.map(u=>COLORS[u]||"#888")}, text:us.map(u=>PCT(rate(u))),
+    marker:{color:us.map(uColor)}, text:us.map(u=>PCT(rate(u))),
     textposition:"outside", cliponaxis:false}],
     baseLayout({margin:{l:54,r:18,t:10,b:90}}), CFG);
   document.getElementById('tr-trend-title').textContent =
-    "Per-unit monthly adherence" + (state.year==="all" ? " · all time" : " · "+state.year);
-  document.getElementById('tr-bar-title').textContent = "By unit · " + periodLabel();
+    "Per-"+dimNoun()+" monthly adherence" + (state.year==="all" ? " · all time" : " · "+state.year);
+  document.getElementById('tr-bar-title').textContent = "By "+dimNoun()+" · " + periodLabel();
   document.getElementById('tr-note').textContent =
     (isVt ? ("Vt cutoff "+Number(state.cutoff).toFixed(1)+" mL/kg") : "Fixed threshold")
     + (state.severity!=="all" ? " · "+SEV_LABEL[state.severity] : "");
@@ -773,6 +801,8 @@ document.getElementById('vt-slider').oninput = e => {
 document.getElementById('tr-measure').onchange = e => {
   state.trendMeasure = e.target.value; if(active==="p-trend") drawTrends();
 };
+const grpSel = document.getElementById('tr-groupby');
+if(grpSel){ grpSel.onchange = e => { state.unitDim = e.target.value; if(active==="p-trend") drawTrends(); }; }
 const yearSel=document.getElementById('sel-year'), monthSel=document.getElementById('sel-month'),
       weekSel=document.getElementById('sel-week'), sevSel=document.getElementById('sel-severity');
 function populateWeeks(yr){
@@ -817,6 +847,14 @@ hist_divs = "".join(
     for c in ["vt_per_pbw", "plateau", "driving_pressure", "peep", "fio2"]
 )
 unit_opts = "".join(f'<option value="{m}">{html.escape(MEASURE_LABEL[m])}</option>' for m in ["vt", "plat", "dp", "comp"])
+# "Group ICUs by" toggle — only meaningful when ≥1 location_type splits into multiple specific units.
+_splits = any(list(name_parent.values()).count(t) > 1 for t in set(name_parent.values()))
+groupby_ctrl = (
+    '<span><label>Group ICUs by</label> <select id="tr-groupby">'
+    '<option value="type">ICU type</option>'
+    f'<option value="name">Specific unit ({len(name_units)})</option>'
+    '</select></span>'
+) if (name_units and _splits) else ""
 year_opts = '<option value="all">All years</option>' + "".join(f'<option value="{y}">{y}</option>' for y in years)
 _MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 month_opts = '<option value="all">All months</option>' + "".join(f'<option value="{i:02d}">{_MON[i-1]}</option>' for i in range(1, 13))
@@ -890,6 +928,7 @@ BODY = f"""
   <h2>By ICU unit &amp; over time</h2>
   <div class="controls">
     <span><label>Measure</label> <select id="tr-measure">{unit_opts}</select></span>
+    {groupby_ctrl}
     <span class="fig-caption" id="tr-note"></span>
   </div>
   <div class="grid2">
@@ -1013,6 +1052,24 @@ def sev_rate(measure, sev, ck=c6):
 
 
 checks["severe != not_severe (vt@6)"] = abs(sev_rate("vt", "severe") - sev_rate("vt", "not_severe")) > 1e-6
+
+# Name (specific-unit) dimension: payload present, keys cover every name unit, and the
+# specific units nest exactly under their parent location_type (vt n_total, all time × severity).
+checks["name-dim payload present"] = (
+    len(pl.get("name_units", [])) == len(name_units)
+    and all(n in pl["ad"] for n in pl.get("name_units", []))
+    and all(n in pl["stc"]["plat"] for n in pl.get("name_units", [])))
+checks["group-by toggle present when units split"] = (not (_splits and name_units)) or ('id="tr-groupby"' in text)
+def _vt_tot(u):
+    return sum(sum(pl["tot"][u][s]) for s in pl["severity_strata"])
+_parent = pl.get("unit_dims", {}).get("parent", {})
+_kids = {}
+for _n, _t in _parent.items():
+    _kids.setdefault(_t, []).append(_n)
+checks["name children sum to parent type"] = all(
+    (_t not in pl["tot"]) or (sum(_vt_tot(_n) for _n in _ns) == _vt_tot(_t))
+    for _t, _ns in _kids.items())
+
 for k, v in checks.items():
     print(f"  [{'ok' if v else 'XX'}] {k}")
 print(f"\n  Vt slider (site-wide assessable): " +

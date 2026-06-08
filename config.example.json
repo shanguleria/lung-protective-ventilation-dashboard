@@ -4,5 +4,6 @@
   "timezone": "US/Central",
   "site": "YourSite",
   "clif_version": "2.1.0",
-  "metrics": ["lpv", "proning", "sat", "sbt"]
+  "metrics": ["lpv", "proning", "sat", "sbt"],
+  "unit_labels": {}
 }

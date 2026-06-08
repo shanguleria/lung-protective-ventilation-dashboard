@@ -237,12 +237,18 @@ def build_icu_intervals(adt_s: pd.DataFrame, mapping: pd.DataFrame, tz: str) -> 
     a = a.merge(mapping[["hospitalization_id", "encounter_block"]], on="hospitalization_id", how="left")
     a["location_category"] = a["location_category"].astype("string").str.strip().str.lower()
     icu = a.loc[a["location_category"] == ICU_CATEGORY,
-                ["encounter_block", "in_dttm", "out_dttm", "location_type"]].copy()
+                ["encounter_block", "in_dttm", "out_dttm", "location_type", "location_name"]].copy()
     icu["encounter_block"] = icu["encounter_block"].astype(str)
     icu = icu[icu["encounter_block"].notna() & (icu["encounter_block"] != "nan")]
     icu["in_dttm"] = _coerce_dttm(icu["in_dttm"], tz)
     icu["out_dttm"] = _coerce_dttm(icu["out_dttm"], tz)
     icu["location_type"] = icu["location_type"].astype("string").str.strip().str.lower()
+    # location_name = the specific physical unit (finer than location_type); carried alongside so
+    # each patient-day can ALSO be attributed to its specific unit (nested within the chosen type).
+    # Keep RAW case (unlike location_type) so the unit code matches the other verticals' feeds —
+    # the scorecard unions name keys across feeds, so casing must agree (LPV emits raw e.g. "N09S").
+    icu["location_name"] = icu["location_name"].astype("string").str.strip()
+    icu["location_name"] = icu["location_name"].fillna("unknown").replace("", "unknown")
     icu = icu.dropna(subset=["in_dttm", "out_dttm"])
     icu = icu[icu["out_dttm"] > icu["in_dttm"]]
     return icu
@@ -259,7 +265,8 @@ def intersect_imv_icu(imv: pd.DataFrame, icu: pd.DataFrame) -> pd.DataFrame:
         SELECT imv.encounter_block AS encounter_block,
                greatest(imv.seg_start, icu.in_dttm)  AS vstart,
                least(imv.seg_end,  icu.out_dttm)      AS vend,
-               icu.location_type                       AS unit
+               icu.location_type                       AS unit,
+               icu.location_name                       AS unit_name
         FROM imv JOIN icu
           ON imv.encounter_block = icu.encounter_block
          AND imv.seg_start < icu.out_dttm
@@ -298,10 +305,10 @@ def expand_to_days(vint: pd.DataFrame, tz: str) -> pd.DataFrame:
                 # icu_day as a stable "YYYY-MM-DD" string -> robust merge keys
                 # across parquet round-trips and DuckDB GROUP BY (date dtypes
                 # otherwise silently mismatch).
-                recs.append((r.encounter_block, d.strftime("%Y-%m-%d"), r.unit,
+                recs.append((r.encounter_block, d.strftime("%Y-%m-%d"), r.unit, r.unit_name,
                              (hi - lo).total_seconds() / 60.0, lo, hi))
             d = d + one_day
-    cols = ["encounter_block", "icu_day", "unit", "overlap_min", "day_in", "day_out"]
+    cols = ["encounter_block", "icu_day", "unit", "unit_name", "overlap_min", "day_in", "day_out"]
     dd = pd.DataFrame.from_records(recs, columns=cols)
     if dd.empty:
         return dd
@@ -315,8 +322,24 @@ def expand_to_days(vint: pd.DataFrame, tz: str) -> pd.DataFrame:
                   day_out=("day_out", "max"))
              .reset_index())
     agg["unit"] = agg["unit"].fillna("unknown").replace("", "unknown")
-    log.info("ventilated-ICU patient-days: %d (across %d encounter_blocks)",
-             len(agg), agg["encounter_block"].nunique())
+
+    # Specific unit (location_name), NESTED within the chosen type: among that day's
+    # intervals whose location_type == the chosen unit, pick the location_name with the
+    # most ventilated-ICU overlap (alphabetical tie-break). Keeps `unit` (type) numbers
+    # unchanged and guarantees every unit_name rolls up to exactly one unit.
+    dn = dd.merge(agg[["encounter_block", "icu_day", "unit"]]
+                  .rename(columns={"unit": "chosen_unit"}), on=["encounter_block", "icu_day"])
+    dn = dn[dn["unit"] == dn["chosen_unit"]]
+    name_agg = (dn.groupby(["encounter_block", "icu_day", "unit_name"])["overlap_min"].sum()
+                .reset_index()
+                .sort_values(["encounter_block", "icu_day", "overlap_min", "unit_name"],
+                             ascending=[True, True, False, True])
+                .drop_duplicates(["encounter_block", "icu_day"]))
+    agg = agg.merge(name_agg[["encounter_block", "icu_day", "unit_name"]],
+                    on=["encounter_block", "icu_day"], how="left")
+    agg["unit_name"] = agg["unit_name"].fillna("unknown").replace("", "unknown")
+    log.info("ventilated-ICU patient-days: %d (across %d encounter_blocks); specific units: %d",
+             len(agg), agg["encounter_block"].nunique(), agg["unit_name"].nunique())
     return agg
 
 

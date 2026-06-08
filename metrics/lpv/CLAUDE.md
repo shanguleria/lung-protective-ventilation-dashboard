@@ -66,6 +66,37 @@ Other tables (medications, microbiology, scores) are **not** needed in this phas
 
 ---
 
+## ICU grouping dimensions (location_type vs location_name)
+
+By-unit breakdowns support **two ICU-grouping grains**, switchable via a "Group ICUs by" toggle in
+the dashboard's "By unit & over time" tab and on the bundle scorecard:
+
+- **ICU type** (default) — `adt.location_type` (e.g. `medical_icu`). Back-compatible; all prior
+  numbers are unchanged.
+- **Specific unit** — `adt.location_name` (e.g. `N09S`). A single `location_type` can cover several
+  physical units; this grain is the actionable one for site-level QI. At UChicago only `medical_icu`
+  splits (→ `N09S` + `N09N`); other sites may fan out further.
+
+**How it threads through the pipeline:**
+- `01_cohort.py` assigns `assigned_unit` (type, by most-IMV-rows/day — *unchanged*) and, nested
+  *within* that chosen type, `assigned_unit_name` (the specific unit). Deriving the name inside the
+  already-chosen type guarantees every name rolls up to exactly one type and keeps type-level numbers
+  byte-identical (a hard cross-check asserts the nesting).
+- `02_features.py` carries `assigned_unit_name` as a passthrough id column.
+- `03_aggregate.py` emits the daily/monthly/weekly summaries + Vt grid for **both** dims, tagged with
+  a `dim` column (`type` | `name`); the name dim has per-unit rows only (no `__ALL__` — the shared
+  site-wide row lives on the type dim). Check (7) asserts the name children sum to their parent type.
+- `05_tile_feed.py` publishes both sets of unit keys in `headline`/`segment` cells plus a `dims`
+  block: `{type:[...], name:[...], parent:{name→type}, labels:{...}}`.
+- `04_dashboard.py` / `scorecard/build_scorecard.py` read `dims` to drive the toggle; un-migrated
+  feeds (no name cells) fall back to site-wide with the existing grain-fallback badge.
+
+**Friendly unit labels:** specific units are raw codes (`N09S`) by default. Set an optional map in
+`config.json` → `"unit_labels": {"N09S": "MICU North", ...}` to display friendly names; unmapped
+codes fall back to the raw value.
+
+---
+
 ## Open questions
 
 These need answers before the dashboard can be built. Track in `.claude/claude-todo.md`.

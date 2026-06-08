@@ -134,7 +134,7 @@ pbw_map = (cohort.dropna(subset=["pbw_kg"]).groupby("hospitalization_id")["pbw_k
 span = (cohort.groupby("hospitalization_id")["calendar_day"]
         .agg(lambda s: (max(s) - min(s)).days + 1)
         .rename("encounter_span_days").reset_index())
-unit_map = cohort[["hospitalization_id", "calendar_day", "assigned_unit"]]
+unit_map = cohort[["hospitalization_id", "calendar_day", "assigned_unit", "assigned_unit_name"]]
 
 print("[0] Loading respiratory_support (all device categories, cohort hosps) ...")
 rs_tbl = RespiratorySupport.from_file(
@@ -289,7 +289,7 @@ for m in MEASURES:
 out = out.merge(span, on="hospitalization_id", how="left")
 out["long_span_flag"] = out["encounter_span_days"] > LONG_SPAN_DAYS
 
-id_cols = ["hospitalization_id", "patient_id", "calendar_day", "assigned_unit",
+id_cols = ["hospitalization_id", "patient_id", "calendar_day", "assigned_unit", "assigned_unit_name",
            "sex_category", "age_at_admit", "height_cm", "pbw_kg",
            "encounter_span_days", "long_span_flag",
            "total_imv_minutes", "mode_eligible_minutes"]

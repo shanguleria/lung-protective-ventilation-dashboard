@@ -367,10 +367,19 @@ FILTER_JS = r"""
 (function(){
   const $ = id => document.getElementById(id);
   const min = CFG.smallCellMin;
-  const state = {unit: "__ALL__", gran: "all", period: "__all__"};
+  const state = {unit: "__ALL__", gran: "all", period: "__all__", unitDim: "type"};
 
   const unitSel = $("f-unit"), periodSel = $("f-period"), periodWrap = $("f-period-wrap");
   const plabel = p => (CFG.periodLabels && CFG.periodLabels[p]) || p;
+  // "Group ICUs by": location_type (default) vs specific unit (location_name). Swaps the Unit
+  // dropdown's options; SLICES holds both grains.
+  const groupSel = $("f-group");
+  function unitsForDim(){ return state.unitDim === "name" ? (CFG.nameOrder || ["__ALL__"]) : CFG.unitOrder; }
+  function rebuildUnitOptions(){
+    const list = unitsForDim();
+    unitSel.innerHTML = list.map(u => '<option value="' + u + '">' + (CFG.unitLabels[u] || u) + '</option>').join('');
+    state.unit = "__ALL__"; unitSel.value = "__ALL__";
+  }
 
   function periodsFor(unit, gran){
     if (gran === "all") return [];
@@ -465,6 +474,9 @@ FILTER_JS = r"""
 
   // wire controls
   unitSel.onchange = () => { state.unit = unitSel.value; fillPeriods(); render(); };
+  if (groupSel) groupSel.onchange = () => {
+    state.unitDim = groupSel.value; rebuildUnitOptions(); fillPeriods(); render();
+  };
   periodSel.onchange = () => { state.period = periodSel.value; render(); };
   document.querySelectorAll("#f-gran button").forEach(b => b.onclick = () => {
     document.querySelectorAll("#f-gran button").forEach(x => x.classList.remove("on"));
@@ -493,15 +505,24 @@ def _card_slot(cid, label, big0, sub0):
 
 
 def build_controls(slices: pd.DataFrame) -> str:
-    units = [u for u in UNIT_LABELS if u in set(slices["unit"])]
+    typ = slices[slices["dim"] == "type"] if "dim" in slices.columns else slices
+    units = [u for u in UNIT_LABELS if u in set(typ["unit"])]
     opts = "".join(
         f'<option value="{html.escape(u)}">{html.escape(UNIT_LABELS[u])}</option>' for u in units)
+    name_units = sorted(set(slices.loc[(slices["dim"] == "name") & (slices["unit"] != "unknown"), "unit"])) \
+        if "dim" in slices.columns else []
+    splits = "dim" in slices.columns and slices[slices["dim"] == "name"].groupby("parent")["unit"].nunique().gt(1).any()
+    group_ctl = ('<label class="ctl">Group ICUs by<select id="f-group">'
+                 '<option value="type">ICU type</option>'
+                 f'<option value="name">Specific unit ({len(name_units)})</option>'
+                 '</select></label>') if (name_units and splits) else ""
     gran_btns = "".join(
         '<button data-g="{g}"{on}>{lab}</button>'.format(
             g=g, on=' class="on"' if g == "all" else "", lab=html.escape(GRAN_LABELS[g]))
         for g in ("all", "year", "month", "week"))
     return (
         '<div class="controls">'
+        + group_ctl +
         f'<label class="ctl">Unit<select id="f-unit">{opts}</select></label>'
         f'<div class="ctl">Time<div class="seg" id="f-gran">{gran_btns}</div></div>'
         '<label class="ctl" id="f-period-wrap" style="display:none">Period<select id="f-period"></select></label>'
@@ -670,9 +691,23 @@ def main() -> None:
     slices_js = build_slices_js(slices)
     period_labels = {p: _period_label(p) for p in
                      slices.loc[slices["granularity"].isin(["year", "month", "week"]), "period"].unique()}
+    typ = slices[slices["dim"] == "type"] if "dim" in slices.columns else slices
+    unit_order = ["__ALL__"] + [u for u in UNIT_LABELS if u in set(typ["unit"]) and u not in ("__ALL__", "unknown")]
+    # Specific-unit (location_name) dimension for the "Group ICUs by" toggle.
+    name_rows = slices[slices["dim"] == "name"] if "dim" in slices.columns else slices.iloc[0:0]
+    name_parent = name_rows.drop_duplicates("unit").set_index("unit")["parent"].to_dict()
+    _canon = [u for u in UNIT_LABELS if u not in ("__ALL__", "unknown")]
+    name_units = sorted([n for n in name_parent if n != "unknown"],
+                        key=lambda n: (_canon.index(name_parent[n]) if name_parent[n] in _canon else 99, n))
+    name_order = ["__ALL__"] + name_units
+    LABELS = cfg.get("unit_labels", {}) or {}
+    unit_labels = {u: UNIT_LABELS.get(u, u) for u in slices["unit"].unique()}
+    unit_labels.update({n: LABELS.get(n, n) for n in name_units})
+    unit_labels.update({u: LABELS[u] for u in unit_order if u in LABELS})
     cfg_js = {
         "smallCellMin": small_cell_min,
-        "unitLabels": {u: UNIT_LABELS.get(u, u) for u in slices["unit"].unique()},
+        "unitLabels": unit_labels,
+        "unitOrder": unit_order, "nameOrder": name_order,
         "granLabels": GRAN_LABELS,
         "periodLabels": period_labels,
     }

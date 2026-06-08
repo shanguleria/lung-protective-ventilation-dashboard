@@ -110,8 +110,12 @@ adt["out_dttm"] = pd.to_datetime(adt["out_dttm"])
 
 # Restrict to ICU stays
 icu = adt.loc[adt["location_category"].str.lower().fillna("") == "icu",
-              ["hospitalization_id", "location_type", "in_dttm", "out_dttm"]].copy()
+              ["hospitalization_id", "location_type", "location_name", "in_dttm", "out_dttm"]].copy()
 icu["location_type"] = icu["location_type"].fillna("__unknown_icu_type__")
+# location_name is the specific physical unit (finer than location_type); a single
+# location_type can cover several. Carried alongside so each patient-day can ALSO be
+# attributed to its specific unit (see the `assigned_unit_name` derivation below).
+icu["location_name"] = icu["location_name"].fillna("__unknown_unit__")
 print(f"  ICU stays: {len(icu):,} across {icu['hospitalization_id'].nunique():,} hosps")
 
 
@@ -162,6 +166,34 @@ day_unit = day_unit.sort_values(
 top_unit = day_unit.drop_duplicates(subset=["hospitalization_id", "calendar_day"], keep="first")
 top_unit = top_unit.rename(columns={"location_type": "assigned_unit"})
 
+# --- Specific-unit (location_name) assignment, NESTED within the chosen location_type ---
+# Keep the location_type pick above untouched (type-level numbers must not move), then,
+# among that day's IMV rows whose location_type == the assigned type, pick the
+# location_name with the most rows (same alphabetical tie-break). Deriving the name
+# within the already-chosen type guarantees every assigned_unit_name rolls up to exactly
+# one assigned_unit (clean nesting; name-level day-counts sum to the type total).
+day_name = (
+    attr_icu.groupby(["hospitalization_id", "calendar_day", "location_type", "location_name"])
+    .size()
+    .reset_index(name="n_imv_rows_in_name")
+)
+# Restrict to rows of each day's chosen type, then pick the top location_name.
+day_name = day_name.merge(
+    top_unit[["hospitalization_id", "calendar_day", "assigned_unit"]],
+    on=["hospitalization_id", "calendar_day"], how="inner",
+)
+day_name = day_name[day_name["location_type"] == day_name["assigned_unit"]]
+day_name = day_name.sort_values(
+    ["hospitalization_id", "calendar_day", "n_imv_rows_in_name", "location_name"],
+    ascending=[True, True, False, True],
+)
+top_name = day_name.drop_duplicates(subset=["hospitalization_id", "calendar_day"], keep="first")
+top_name = top_name.rename(columns={"location_name": "assigned_unit_name"})
+top_unit = top_unit.merge(
+    top_name[["hospitalization_id", "calendar_day", "assigned_unit_name"]],
+    on=["hospitalization_id", "calendar_day"], how="left",
+)
+
 # Per (hosp, day): total IMV rows on ICU
 day_totals = (
     attr_icu.groupby(["hospitalization_id", "calendar_day"])
@@ -175,7 +207,7 @@ day_totals = (
 # ----------------------------------------------------------------------------
 
 patient_days = day_totals.merge(
-    top_unit[["hospitalization_id", "calendar_day", "assigned_unit"]],
+    top_unit[["hospitalization_id", "calendar_day", "assigned_unit", "assigned_unit_name"]],
     on=["hospitalization_id", "calendar_day"],
     how="left",
 )
@@ -246,6 +278,14 @@ print(f"\n  assigned_unit distribution (patient-days):")
 for k, v in patient_days["assigned_unit"].fillna("__none__").value_counts().items():
     print(f"    {k:>28s}: {v:>8,}  ({v / len(patient_days) * 100:.2f}%)")
 
+print(f"\n  assigned_unit_name distribution (patient-days):")
+for k, v in patient_days["assigned_unit_name"].fillna("__none__").value_counts().items():
+    print(f"    {k:>28s}: {v:>8,}  ({v / len(patient_days) * 100:.2f}%)")
+
+# Nesting sanity check: every assigned_unit_name must roll up to exactly one assigned_unit.
+_nest = patient_days.dropna(subset=["assigned_unit_name"]).groupby("assigned_unit_name")["assigned_unit"].nunique()
+assert (_nest <= 1).all(), f"location_name maps to >1 location_type: {_nest[_nest > 1].to_dict()}"
+
 print(f"\n  sex_category distribution (patient-days):")
 for k, v in patient_days["sex_category"].fillna("__missing__").value_counts().items():
     print(f"    {k:>28s}: {v:>8,}  ({v / len(patient_days) * 100:.2f}%)")
@@ -273,7 +313,7 @@ print(f"  IMV hosps fully excluded (no ICU overlap any day): {len(hosps_excluded
 
 # Final column order
 patient_days = patient_days[[
-    "hospitalization_id", "patient_id", "calendar_day", "assigned_unit",
+    "hospitalization_id", "patient_id", "calendar_day", "assigned_unit", "assigned_unit_name",
     "sex_category", "age_at_admit", "height_cm", "pbw_kg", "n_imv_rows",
 ]].sort_values(["calendar_day", "hospitalization_id"]).reset_index(drop=True)
 
@@ -291,6 +331,16 @@ summary = {
     "calendar_day_max": str(patient_days["calendar_day"].max()),
     "assigned_unit_counts": {
         str(k): int(v) for k, v in patient_days["assigned_unit"].fillna("__none__").value_counts().items()
+    },
+    "assigned_unit_name_counts": {
+        str(k): int(v) for k, v in patient_days["assigned_unit_name"].fillna("__none__").value_counts().items()
+    },
+    "unit_name_to_type": {
+        str(n): str(t) for n, t in (
+            patient_days.dropna(subset=["assigned_unit_name"])
+            .drop_duplicates(subset=["assigned_unit_name"])
+            .set_index("assigned_unit_name")["assigned_unit"].items()
+        )
     },
     "sex_counts": {
         str(k): int(v) for k, v in patient_days["sex_category"].fillna("__missing__").value_counts().items()

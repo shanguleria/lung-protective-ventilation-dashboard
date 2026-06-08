@@ -181,11 +181,14 @@ def attach_unit_and_periods(pl: pd.DataFrame, cohort_mod, tz: str) -> pd.DataFra
     adt = pd.read_parquet(cohort_mod.CACHE_DIR / "adt_stitched.parquet")
     adt["location_category"] = adt["location_category"].astype("string").str.strip().str.lower()
     icu = adt.loc[adt["location_category"] == "icu",
-                  ["encounter_block", "in_dttm", "out_dttm", "location_type"]].copy()
+                  ["encounter_block", "in_dttm", "out_dttm", "location_type", "location_name"]].copy()
     icu["encounter_block"] = icu["encounter_block"].astype(str)
     icu["in_dttm"] = cohort_mod._coerce_dttm(icu["in_dttm"], tz)
     icu["out_dttm"] = cohort_mod._coerce_dttm(icu["out_dttm"], tz)
     icu["location_type"] = icu["location_type"].astype("string")
+    # location_name = specific physical unit (finer than location_type); same ICU interval, so it
+    # nests under the chosen type for free. Raw case (matches the other verticals' feed keys).
+    icu["location_name"] = icu["location_name"].astype("string")
 
     base = pl[["encounter_block", "T_eligible"]].copy()
     base["encounter_block"] = base["encounter_block"].astype(str)
@@ -198,6 +201,7 @@ def attach_unit_and_periods(pl: pd.DataFrame, cohort_mod, tz: str) -> pd.DataFra
         """
         SELECT base.encounter_block AS encounter_block,
                icu.location_type    AS unit,
+               icu.location_name    AS unit_name,
                icu.in_dttm          AS in_dttm
         FROM base LEFT JOIN icu
           ON base.encounter_block = icu.encounter_block
@@ -205,14 +209,18 @@ def attach_unit_and_periods(pl: pd.DataFrame, cohort_mod, tz: str) -> pd.DataFra
         """
     ).fetchdf()
     con.close()
-    # One unit per block (earliest containing interval if several overlap).
+    # One unit per block (earliest containing interval if several overlap); the specific unit
+    # (unit_name) comes from that SAME interval, so it nests under the chosen type by construction.
     joined = (joined.sort_values(["encounter_block", "in_dttm"])
               .drop_duplicates("encounter_block", keep="first"))
     unit_map = joined.set_index("encounter_block")["unit"]
+    name_map = joined.set_index("encounter_block")["unit_name"]
 
     pl = pl.copy()
     unit = pl["encounter_block"].astype(str).map(unit_map).astype("string")
     pl["unit"] = unit.where(unit.notna() & (unit.str.len() > 0), other="unknown")
+    uname = pl["encounter_block"].astype(str).map(name_map).astype("string")
+    pl["unit_name"] = uname.where(uname.notna() & (uname.str.len() > 0), other="unknown")
 
     te = cohort_mod._coerce_dttm(pl["T_eligible"], tz)
     iso = te.dt.isocalendar()
@@ -244,25 +252,35 @@ def build_slice_cells(pl: pd.DataFrame) -> pd.DataFrame:
     """
     rows = []
 
-    def emit(unit, gran, period, g):
+    def emit(unit, gran, period, g, dim="type", parent=None):
         rec = _slice_metrics(g)
-        rec.update(unit=unit, granularity=gran, period=period)
+        rec.update(unit=unit, granularity=gran, period=period, dim=dim, parent=parent)
         rows.append(rec)
 
+    # Type dimension (location_type) — incl. __ALL__; byte-identical to the prior build.
     for unit, gu in [("__ALL__", pl)] + list(pl.groupby("unit", observed=True)):
         emit(unit, "all", "all", gu)
         for gran, col in GRANULARITY_COL.items():
             for period, g in gu.groupby(col, observed=True):
                 emit(unit, gran, str(period), g)
 
-    cols = ["unit", "granularity", "period", "n_eligible", "n_ever_proned",
+    # Specific-unit dimension (location_name) — per-unit rows only (nested within type, no __ALL__).
+    if "unit_name" in pl.columns:
+        for uname, gun in pl.groupby("unit_name", observed=True):
+            parent = gun["unit"].mode().iat[0] if not gun["unit"].mode().empty else "unknown"
+            emit(uname, "all", "all", gun, dim="name", parent=parent)
+            for gran, col in GRANULARITY_COL.items():
+                for period, g in gun.groupby(col, observed=True):
+                    emit(uname, gran, str(period), g, dim="name", parent=parent)
+
+    cols = ["unit", "dim", "parent", "granularity", "period", "n_eligible", "n_ever_proned",
             "n_adherent", "n_documented", "ttp_median_h", "ttp_q1_h", "ttp_q3_h"]
     df = pd.DataFrame(rows)[cols]
     df["rate_ever_proned"] = df["n_ever_proned"] / df["n_eligible"]
     df["rate_adherent_all"] = df["n_adherent"] / df["n_eligible"]
     df["rate_adherent_charted"] = np.where(
         df["n_documented"] > 0, df["n_adherent"] / df["n_documented"], np.nan)
-    return df.sort_values(["unit", "granularity", "period"]).reset_index(drop=True)
+    return df.sort_values(["dim", "unit", "granularity", "period"]).reset_index(drop=True)
 
 
 def compute_cdf(time_to_prone_hours: pd.Series, n_eligible: int, horizons: list[int]) -> dict:
@@ -333,7 +351,21 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
                     only emitted where the slice exists (non-empty group), which naturally
                     prunes empty (unit, month) combinations.
     """
-    units = ["__ALL__"] + [u for u in CANONICAL_UNITS if u in set(slices["unit"])]
+    is_type = slices["dim"] == "type" if "dim" in slices.columns else slices["unit"].notna()
+    units = ["__ALL__"] + [u for u in CANONICAL_UNITS if u in set(slices.loc[is_type, "unit"])]
+    # Specific-unit (location_name) dimension: name keys nest under their parent type. Drop the
+    # "unknown" catch-all (T_eligible in a non-ICU gap) from the displayed name list, mirroring how
+    # the type list already excludes it (only CANONICAL_UNITS).
+    sl_name = slices[slices["dim"] == "name"] if "dim" in slices.columns else slices.iloc[0:0]
+    name_parent = sl_name.drop_duplicates("unit").set_index("unit")["parent"].to_dict()
+    name_units = sorted([n for n in name_parent if n != "unknown"],
+                        key=lambda n: (CANONICAL_UNITS.index(name_parent[n])
+                                       if name_parent[n] in CANONICAL_UNITS else 99, n))
+    LABELS = cfg.get("unit_labels", {}) or {}
+    dim_labels = {n: LABELS.get(n, n) for n in name_units}
+    dim_labels.update({u: LABELS[u] for u in units if u != "__ALL__" and u in LABELS})
+    all_keys = units + name_units
+
     months = sorted(slices.loc[slices["granularity"] == "month", "period"].unique())
     by_key = {(r.unit, "all" if r.granularity == "all" else r.period): r
               for r in slices.itertuples(index=False)
@@ -341,7 +373,7 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
 
     def cells(num_col, den_col):
         out = {}
-        for u in units:
+        for u in all_keys:
             pc = {}
             for p in ["all"] + months:
                 r = by_key.get((u, p))
@@ -369,6 +401,12 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
                  f"only {m['n_documented']}/{m['n_eligible']} eligible have any "
                  "position record. Adherence shown as a bound (all-eligible vs charted)."),
         "grain": {"units": units, "periods": ["all", "month"]},
+        # Two ICU-grouping dimensions: `type` = location_type (back-compat, also grain.units);
+        # `name` = specific unit (location_name). Both key into headline/segment cells; `parent`
+        # nests each name under its type; `labels` are optional friendly names (config unit_labels).
+        # The scorecard's "Group ICUs by" toggle reads this block.
+        "dims": {"type": [u for u in units if u != "__ALL__"], "name": name_units,
+                 "parent": {n: name_parent[n] for n in name_units}, "labels": dim_labels},
         "headline": {
             "label": "ever proned",
             "den_label": "of PROSEVA-eligible",
@@ -394,18 +432,29 @@ def _assert_phi_free(feed: dict) -> None:
 def _assert_slice_integrity(slices: pd.DataFrame, m: dict) -> None:
     """The __ALL__/all cell must reproduce the headline; each granularity must
     partition the cohort (per-unit and per-period n_eligible both sum to total)."""
-    a = slices[(slices["unit"] == "__ALL__") & (slices["granularity"] == "all")].iloc[0]
+    # Integrity checks are scoped to the TYPE dim so they stay byte-identical to the pre-name build.
+    typ = slices[slices["dim"] == "type"] if "dim" in slices.columns else slices
+    a = typ[(typ["unit"] == "__ALL__") & (typ["granularity"] == "all")].iloc[0]
     for col, key in [("n_eligible", "n_eligible"), ("n_ever_proned", "n_ever_proned"),
                      ("n_adherent", "n_adherent"), ("n_documented", "n_documented")]:
         if int(a[col]) != int(m[key]):
             raise RuntimeError(f"slice __ALL__/all {col}={a[col]} != headline {m[key]}")
-    units_all = slices[(slices["granularity"] == "all") & (slices["unit"] != "__ALL__")]
+    units_all = typ[(typ["granularity"] == "all") & (typ["unit"] != "__ALL__")]
     if int(units_all["n_eligible"].sum()) != m["n_eligible"]:
         raise RuntimeError("per-unit n_eligible does not sum to total")
     for gran in GRANULARITY_COL:
-        s = slices[(slices["unit"] == "__ALL__") & (slices["granularity"] == gran)]
+        s = typ[(typ["unit"] == "__ALL__") & (typ["granularity"] == gran)]
         if int(s["n_eligible"].sum()) != m["n_eligible"]:
             raise RuntimeError(f"per-period ({gran}) n_eligible does not sum to total")
+    # Name dim nests under type: each type's specific-unit children sum to its eligible total.
+    if "dim" in slices.columns:
+        nm = slices[(slices["dim"] == "name") & (slices["granularity"] == "all")]
+        if not nm.empty:
+            by_parent = nm.groupby("parent")["n_eligible"].sum()
+            type_tot = units_all.set_index("unit")["n_eligible"]
+            for t, v in by_parent.items():
+                if int(v) != int(type_tot.get(t, -1)):
+                    raise RuntimeError(f"name children of {t} sum to {v} != type {type_tot.get(t)}")
 
 
 def main() -> None:

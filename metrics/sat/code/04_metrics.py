@@ -74,6 +74,10 @@ def attach_periods(df: pd.DataFrame) -> pd.DataFrame:
     df["period_week"] = (iso["year"].astype("Int64").astype(str) + "-W"
                          + iso["week"].astype("Int64").astype(str).str.zfill(2))
     df["unit"] = df["unit"].astype("string").fillna("unknown").replace("", "unknown")
+    if "unit_name" in df.columns:
+        df["unit_name"] = df["unit_name"].astype("string").fillna("unknown").replace("", "unknown")
+    else:
+        df["unit_name"] = "unknown"
     return df
 
 
@@ -99,25 +103,35 @@ def _slice_metrics(g: pd.DataFrame) -> dict:
 def build_slice_cells(pl: pd.DataFrame) -> pd.DataFrame:
     rows = []
 
-    def emit(unit, gran, period, g):
+    def emit(unit, gran, period, g, dim="type", parent=None):
         rec = _slice_metrics(g)
-        rec.update(unit=unit, granularity=gran, period=period)
+        rec.update(unit=unit, granularity=gran, period=period, dim=dim, parent=parent)
         rows.append(rec)
 
+    # Type dimension (location_type) — incl. __ALL__; byte-identical to the prior build.
     for unit, gu in [("__ALL__", pl)] + list(pl.groupby("unit", observed=True)):
         emit(unit, "all", "all", gu)
         for gran, col in GRANULARITY_COL.items():
             for period, g in gu.groupby(col, observed=True):
                 emit(unit, gran, str(period), g)
 
-    cols = ["unit", "granularity", "period", "n_vent_days", "n_eligible", "n_sat", "n_resumed",
-            "n_notresumed", "n_extubated"]
+    # Specific-unit dimension (location_name) — per-unit rows only (nested within type, no __ALL__).
+    if "unit_name" in pl.columns:
+        for uname, gun in pl.groupby("unit_name", observed=True):
+            parent = gun["unit"].mode().iat[0] if not gun["unit"].mode().empty else "unknown"
+            emit(uname, "all", "all", gun, dim="name", parent=parent)
+            for gran, col in GRANULARITY_COL.items():
+                for period, g in gun.groupby(col, observed=True):
+                    emit(uname, gran, str(period), g, dim="name", parent=parent)
+
+    cols = ["unit", "dim", "parent", "granularity", "period", "n_vent_days", "n_eligible", "n_sat",
+            "n_resumed", "n_notresumed", "n_extubated"]
     df = pd.DataFrame(rows)[cols]
     df["rate_sat"] = df["n_sat"] / df["n_eligible"].replace(0, np.nan)
     df["rate_sat_of_vent"] = df["n_sat"] / df["n_vent_days"].replace(0, np.nan)
     df["rate_resumed"] = df["n_resumed"] / df["n_eligible"].replace(0, np.nan)
     df["rate_extubated_of_sat"] = df["n_extubated"] / df["n_sat"].replace(0, np.nan)
-    return df.sort_values(["unit", "granularity", "period"]).reset_index(drop=True)
+    return df.sort_values(["dim", "unit", "granularity", "period"]).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +188,19 @@ def build_kress_summary(site: str, kress: pd.DataFrame, half: float, generated: 
 # Tile feed (contract v1)
 # ---------------------------------------------------------------------------
 def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
-    units = ["__ALL__"] + [u for u in CANONICAL_UNITS if u in set(slices["unit"])]
+    is_type = slices["dim"] == "type" if "dim" in slices.columns else slices["unit"].notna()
+    units = ["__ALL__"] + [u for u in CANONICAL_UNITS if u in set(slices.loc[is_type, "unit"])]
+    # Specific-unit (location_name) dimension: name keys nest under their parent type.
+    sl_name = slices[slices["dim"] == "name"] if "dim" in slices.columns else slices.iloc[0:0]
+    name_parent = sl_name.drop_duplicates("unit").set_index("unit")["parent"].to_dict()
+    name_units = sorted([n for n in name_parent if n != "unknown"],
+                        key=lambda n: (CANONICAL_UNITS.index(name_parent[n])
+                                       if name_parent[n] in CANONICAL_UNITS else 99, n))
+    LABELS = cfg.get("unit_labels", {}) or {}
+    dim_labels = {n: LABELS.get(n, n) for n in name_units}
+    dim_labels.update({u: LABELS[u] for u in units if u != "__ALL__" and u in LABELS})
+    all_keys = units + name_units
+
     months = sorted(slices.loc[slices["granularity"] == "month", "period"].unique())
     weeks = sorted(slices.loc[slices["granularity"] == "week", "period"].unique())
     by_key = {(r.unit, "all" if r.granularity == "all" else r.period): r
@@ -183,7 +209,7 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
 
     def cells(num_col, den_col, with_n=False):
         out = {}
-        for u in units:
+        for u in all_keys:
             pc = {}
             for p in ["all"] + months + weeks:
                 r = by_key.get((u, p))
@@ -216,6 +242,12 @@ def build_tile_feed(cfg: dict, m: dict, slices: pd.DataFrame) -> dict:
                  "• Crude screen — CLIF can't encode all SAT safety exclusions (seizure, withdrawal, "
                  "ischemia, ↑ICP)"),
         "grain": {"units": units, "periods": ["all", "month", "week"]},
+        # Two ICU-grouping dimensions: `type` = location_type (back-compat, also grain.units);
+        # `name` = specific unit (location_name). Both key into headline/segment cells; `parent`
+        # nests each name under its type; `labels` are optional friendly names (config unit_labels).
+        # The scorecard's "Group ICUs by" toggle reads this block.
+        "dims": {"type": [u for u in units if u != "__ALL__"], "name": name_units,
+                 "parent": name_parent, "labels": dim_labels},
         "headline": {
             "label": "SAT performed",
             "den_label": "of eligible vent-sedation days",
@@ -244,18 +276,29 @@ def _assert_phi_free(feed: dict) -> None:
 
 
 def _assert_slice_integrity(slices: pd.DataFrame, m: dict) -> None:
-    a = slices[(slices["unit"] == "__ALL__") & (slices["granularity"] == "all")].iloc[0]
+    # Integrity checks are scoped to the TYPE dim so they stay byte-identical to the pre-name build.
+    typ = slices[slices["dim"] == "type"] if "dim" in slices.columns else slices
+    a = typ[(typ["unit"] == "__ALL__") & (typ["granularity"] == "all")].iloc[0]
     for col, key in [("n_vent_days", "n_vent_days"), ("n_eligible", "n_eligible"),
                      ("n_sat", "n_sat"), ("n_resumed", "n_resumed")]:
         if int(a[col]) != int(m[key]):
             raise RuntimeError(f"slice __ALL__/all {col}={a[col]} != headline {m[key]}")
-    units_all = slices[(slices["granularity"] == "all") & (slices["unit"] != "__ALL__")]
+    units_all = typ[(typ["granularity"] == "all") & (typ["unit"] != "__ALL__")]
     if int(units_all["n_eligible"].sum()) != m["n_eligible"]:
         raise RuntimeError("per-unit n_eligible does not sum to total")
     for gran in GRANULARITY_COL:
-        s = slices[(slices["unit"] == "__ALL__") & (slices["granularity"] == gran)]
+        s = typ[(typ["unit"] == "__ALL__") & (typ["granularity"] == gran)]
         if int(s["n_eligible"].sum()) != m["n_eligible"]:
             raise RuntimeError(f"per-period ({gran}) n_eligible does not sum to total")
+    # Name dim nests under type: each type's specific-unit children sum EXACTLY to its eligible total.
+    if "dim" in slices.columns:
+        nm = slices[(slices["dim"] == "name") & (slices["granularity"] == "all")]
+        if not nm.empty:
+            by_parent = nm.groupby("parent")["n_eligible"].sum()
+            type_tot = units_all.set_index("unit")["n_eligible"]
+            for t, v in by_parent.items():
+                if int(v) != int(type_tot.get(t, -1)):
+                    raise RuntimeError(f"name children of {t} sum to {v} != type {type_tot.get(t)}")
 
 
 def main() -> None:

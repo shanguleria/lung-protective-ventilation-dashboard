@@ -103,8 +103,29 @@ open output/dashboard/scorecard.html   # macOS  (Linux: xdg-open)
 | `site` | Your site label — appears in the dashboard title + each feed's provenance |
 | `clif_version` | Your CLIF version string |
 | `metrics` | Which metric tiles to build, in slot order, e.g. `["lpv", "proning", "sat"]`. A listed metric with no feed yet shows a "Coming soon…" placeholder; omit a metric you don't run |
+| `unit_labels` | *(optional)* Friendly display names for specific ICU units, e.g. `{"N09S": "MICU North", "N09N": "MICU South"}`. See **Grouping ICUs by specific unit** below. Defaults to `{}` (raw codes shown) |
 
 `config.json` is **gitignored** so your data path stays local; commit only `config.example.json`.
+
+### Grouping ICUs by specific unit (`location_type` vs `location_name`)
+
+Every by-unit breakdown — the bundle scorecard and each metric's drill-down — has a **"Group ICUs
+by"** toggle: **ICU type** (the CLIF `location_type`, e.g. `medical_icu`) or **Specific unit** (the
+CLIF `location_name`, the actual physical unit, e.g. `N09S`). The specific-unit grain is the
+actionable one for site-level QI when a single `location_type` covers several physical units; it is
+computed nested within the type, so the type-level numbers never change.
+
+The toggle appears only when at least one `location_type` at your site splits into multiple
+`location_name`s. Specific units display as their **raw `location_name` code** by default. To show
+friendly names instead, add a `unit_labels` map to `config.json` — no code change, no pipeline re-run
+beyond the scorecard rebuild:
+
+```json
+"unit_labels": { "N09S": "MICU North", "N09N": "MICU South", "N04E": "CT-ICU" }
+```
+
+Unmapped codes fall back to the raw value. Keys are the exact `location_name` strings as they appear
+in your `adt` table.
 
 ---
 

@@ -155,6 +155,30 @@ units = _ui["units"]
 # so a month-only feed (e.g. proning) can resolve a week pick to its month instead of all-time.
 week_month = {w: datetime.strptime(w + "-4", "%G-W%V-%u").strftime("%Y-%m") for w in weeks}
 
+# Specific-unit (location_name) dimension for the "Group ICUs by" toggle. Each migrated feed
+# carries a `dims` block (type/name lists + name->type parent + optional friendly labels). The
+# union across feeds drives the name-mode unit dropdown; feeds that DON'T publish name cells fall
+# back to site-wide via the existing grain-fallback (resolve() tests cell presence per feed).
+def _collect_name_units(feeds):
+    names, parent, labels = [], {}, {}
+    for f in feeds:
+        d = f.get("dims") or {}
+        for n in d.get("name", []):
+            if n not in names:
+                names.append(n)
+        parent.update(d.get("parent", {}))
+        labels.update(d.get("labels", {}))
+    names = sorted(names, key=lambda n: (UNIT_ORDER_REST.index(parent[n])
+                                         if parent.get(n) in UNIT_ORDER_REST else 99, n))
+    return names, parent, labels
+
+
+name_units, name_parent, name_labels = _collect_name_units(feeds)
+# Merged label map (type + specific-unit friendly names) for the dropdown + subtitle.
+UNIT_LABEL_FULL = dict(UNIT_LABEL)
+UNIT_LABEL_FULL.update(name_labels)
+print(f"  specific units (location_name) across feeds: {len(name_units)}")
+
 # ----------------------------------------------------------------------------
 # 3. Tile illustrations / icons (downscale + base64-embed; SVG fallback) + brand logo
 # ----------------------------------------------------------------------------
@@ -210,7 +234,8 @@ payload = {
     "iconHtml": ICON_HTML,
     "weeks": weeks, "week_label": week_label, "months": months, "month_label": month_label,
     "week_month": week_month,
-    "units": units, "unit_label": UNIT_LABEL,
+    "units": units, "unit_label": UNIT_LABEL_FULL,
+    "name_units": name_units, "name_parent": name_parent,
     "generated": datetime.now().isoformat(timespec="minutes"),
 }
 
@@ -222,7 +247,14 @@ print("[5] Writing dashboard/scorecard.html ...")
 latest = weeks[-1]
 week_opts = "".join(f'<option value="{w}">{html.escape(week_label[w])}</option>' for w in reversed(weeks))
 month_opts = "".join(f'<option value="{m}">{html.escape(month_label[m])}</option>' for m in reversed(months))
-unit_sel = "".join(f'<option value="{u}">{html.escape(UNIT_LABEL.get(u, u))}</option>' for u in units)
+unit_sel = "".join(f'<option value="{u}">{html.escape(UNIT_LABEL_FULL.get(u, u))}</option>' for u in units)
+# "Group ICUs by" chip — only when ≥1 feed publishes specific units (a location_type that splits).
+group_chip = (
+    '<div class="chip"><b>Group by</b><select id="sel-group">'
+    '<option value="type">ICU type</option>'
+    f'<option value="name">Specific unit ({len(name_units)})</option>'
+    '</select></div>'
+) if name_units else ""
 
 CSS = """
 :root{--maroon:#8a1f2b;--maroon-d:#6f1622;--cream:#f6efe9;--card:#fffdfb;--ink:#3a2c2c;
@@ -297,6 +329,7 @@ BODY = f"""
   <div class="brand">{f'<img src="{LOGO_IMG}" alt="CLIF">' if LOGO_IMG else HEART + '<span>CLIF</span>'}</div>
   <h1>ICU Ventilator QI Dashboard — {html.escape(SITE)}</h1>
   <div class="chips">
+    {group_chip}
     <div class="chip"><b>Unit</b><select id="sel-unit">{unit_sel}</select></div>
     <div class="chip"><b>Month</b><select id="sel-month"><option value="all">All time</option><option value="__wk__" hidden>—</option>{month_opts}</select></div>
     <div class="chip"><b>Week</b><select id="sel-week"><option value="all">All</option>{week_opts}</select></div>
@@ -328,16 +361,25 @@ function noteHtml(n){
 
 const feedById = {}; P.feeds.forEach(f => feedById[f.metric_id] = f);
 let unit = P.units.includes('__ALL__') ? '__ALL__' : P.units[0];
+let unitDim = 'type';   // 'type' (location_type) | 'name' (specific unit / location_name)
 let pType = 'all', pKey = P.weeks[P.weeks.length-1];   // default: all-time
+// Unit dropdown options for the current grouping dimension (always led by All ICUs).
+function unitListFor(dim){ return (dim==='name') ? ['__ALL__'].concat(P.name_units||[]) : P.units; }
+function unitOptions(dim){
+  return unitListFor(dim).map(u=>`<option value="${u}">${esc(P.unit_label[u]||u)}</option>`).join('');
+}
 
 function curPeriodKey(){ return pType==='all' ? 'all' : pKey; }
 function periodLabel(){ return pType==='all' ? 'all time' : (pType==='month'?P.month_label[pKey]:P.week_label[pKey]); }
 
 // Grain fallback (contract §4): resolve the (unit, period) this feed can actually answer,
-// and a badge so a coarse feed's number is never silently mislabeled.
-function resolve(grain){
+// and a badge so a coarse feed's number is never silently mislabeled. Unit answerability is
+// tested by actual cell presence — this covers BOTH location_type and specific-unit
+// (location_name) keys, so a feed that hasn't published a given unit falls back to site-wide.
+function resolve(feed){
+  const grain = feed.grain;
   let u = unit, ub = '';
-  if(unit!=='__ALL__' && !grain.units.includes(unit)){ u='__ALL__'; ub=' · site-wide'; }
+  if(unit!=='__ALL__' && (feed.headline.cells[unit]==null)){ u='__ALL__'; ub=' · site-wide'; }
   let pk, pb='';
   if(grain.periods.includes(pType)){ pk = curPeriodKey(); }
   else if(pType==='week' && grain.periods.includes('month') && P.week_month[pKey]){
@@ -361,7 +403,7 @@ function sparkSVG(xs, ys, hiKey){
 }
 
 function tileCard(feed){
-  const g = feed.grain, R = resolve(g);
+  const g = feed.grain, R = resolve(feed);
   const hc = (feed.headline.cells[R.u]||{})[R.pk] || null;
   const r = rate(hc);
   const fine = g.periods.includes('week') || g.periods.includes('month');
@@ -445,6 +487,14 @@ const selU=document.getElementById('sel-unit'), selM=document.getElementById('se
 // so it never reads as a contradictory 'All time'. Default state is all-time.
 selU.value=unit; selW.value='all'; selM.value='all';
 selU.onchange = e=>{ unit=e.target.value; render(); };
+const selG=document.getElementById('sel-group');
+if(selG){ selG.onchange = e=>{
+  unitDim = e.target.value;            // swap the unit dropdown to the chosen dimension's units
+  unit = '__ALL__';
+  selU.innerHTML = unitOptions(unitDim);
+  selU.value = '__ALL__';
+  render();
+}; }
 selM.onchange = e=>{ if(e.target.value!=='all'){ pType='month'; pKey=e.target.value; selW.value='all'; }
                      else { pType='all'; pKey=null; selW.value='all'; } render(); };
 selW.onchange = e=>{ if(e.target.value!=='all'){ pType='week'; pKey=e.target.value; selM.value='__wk__'; }
@@ -504,6 +554,16 @@ if "proning" in feeds_by_id:
     hc = feeds_by_id["proning"]["headline"]["cells"]["__ALL__"]["all"]
     checks["proning feed: 0 <= num <= den, den>0"] = 0 <= hc["num"] <= hc["den"] and hc["den"] > 0
     print(f"  proning headline: {hc['num']}/{hc['den']} = {hc['num'] / hc['den'] * 100:.1f}% ever proned")
+# Specific-unit (location_name) dimension wiring.
+if name_units:
+    checks["group-by chip rendered"] = 'id="sel-group"' in HTML
+    checks["name units have headline cells in ≥1 feed"] = all(
+        any(n in f.get("headline", {}).get("cells", {}) for f in feeds) for n in name_units)
+    checks["every name unit nests under a known type"] = all(name_parent.get(n) for n in name_units)
+    if "lpv" in feeds_by_id:
+        _lc = feeds_by_id["lpv"]["headline"]["cells"]
+        checks["lpv answers its specific units"] = all(
+            n in _lc for n in feeds_by_id["lpv"].get("dims", {}).get("name", []))
 
 for k, v in checks.items():
     print(f"  [{'ok' if v else 'XX'}] {k}")
